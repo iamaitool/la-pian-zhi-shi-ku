@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>拉片知识库</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <h1>拉片知识库</h1>
+  <p>拉片 → 沉淀视听语言 → 剧本转分镜。Render + Supabase + DeepSeek 全栈版：数据存 Supabase，AI 在服务端调用。</p>
+  <p class="muted" id="aiStatus">正在检查 AI / 数据库配置…</p>
+</header>
+<nav>
+  <button data-page="shots" class="active">拉片库</button>
+  <button data-page="knowledge">视听语言知识库</button>
+  <button data-page="storyboard">剧本转分镜</button>
+  <button data-page="import">视频导入</button>
+</nav>
+<main>
+  <section id="page-shots" class="page active">
+    <div class="card">
+      <h2>拉片库 <span class="muted" id="shotCount"></span></h2>
+      <div class="row">
+        <input id="shotSearch" placeholder="搜索：片名 / 场景 / 对白 / 景别…" style="flex:1;min-width:220px">
+        <select id="shotFilterEmotion" style="width:160px"><option value="">全部情绪</option><option>紧张</option><option>平静</option><option>悲伤</option><option>愤怒</option><option>喜悦</option><option>悬疑</option></select>
+        <button id="clearSamples">一键清空示例</button>
+      </div>
+      <p class="muted">鼠标停在截图上可看大图（手机点一下打开）。示例数据带“示例”标记，清空示例不会删你的数据。</p>
+    </div>
+    <div class="card">
+      <h3>新增 / 编辑镜头</h3>
+      <form id="shotForm">
+        <input type="hidden" id="shotId">
+        <div class="grid">
+          <div><label>片名 / 场次</label><input id="f-title" placeholder="例：《XX》第3集 · 办公室对峙" required></div>
+          <div><label>开始时间码</label><input id="f-start" placeholder="00:00" value="00:00"></div>
+          <div><label>时长（秒）</label><input id="f-duration" type="number" min="0" step="0.1" placeholder="5"></div>
+          <div><label>情绪</label><select id="f-emotion"><option>紧张</option><option>平静</option><option>悲伤</option><option>愤怒</option><option>喜悦</option><option>悬疑</option></select></div>
+          <div><label>景别</label><input id="f-shotSize" placeholder="特写 / 近景 / 中景 / 全景 / 远景"></div>
+          <div><label>机位</label><input id="f-camera" placeholder="平视 / 仰拍 / 俯拍 / 过肩"></div>
+          <div><label>构图</label><input id="f-composition" placeholder="三分法 / 对称 / 框式…"></div>
+          <div><label>运镜</label><input id="f-movement" placeholder="固定 / 推 / 拉 / 摇 / 移 / 跟"></div>
+          <div><label>光线</label><input id="f-lighting" placeholder="硬光 / 柔光 / 低调 / 逆光…"></div>
+          <div><label>转场方式</label><input id="f-transition" placeholder="硬切 / 叠化 / 淡入淡出…"></div>
+          <div><label>蒙太奇运用</label><input id="f-montage" placeholder="正反打 / 平行蒙太奇…"></div>
+          <div><label>关键帧图片（可选，本地 data URL）</label><input id="f-thumb" type="file" accept="image/*"></div>
+        </div>
+        <label>画面内容</label><textarea id="f-content"></textarea>
+        <label>人物动作</label><input id="f-action">
+        <label>对白</label><input id="f-dialogue">
+        <label>背景音乐</label><input id="f-music">
+        <label>音效</label><input id="f-sfx">
+        <label>为什么这样用</label><textarea id="f-why"></textarea>
+        <div class="row" style="margin-top:12px">
+          <button class="primary" type="submit">保存镜头</button>
+          <button type="button" id="shotReset">清空表单</button>
+        </div>
+      </form>
+    </div>
+    <div id="shotList"></div>
+  </section>
+
+  <section id="page-knowledge" class="page">
+    <div class="card">
+      <h2>视听语言知识库 <span class="muted" id="knowCount"></span></h2>
+      <div class="row">
+        <input id="knowSearch" placeholder="搜索规律 / 标签…" style="flex:1;min-width:220px">
+        <select id="knowFilterEmotion" style="width:160px"><option value="">全部情绪</option><option>紧张</option><option>平静</option><option>悲伤</option><option>愤怒</option><option>喜悦</option><option>悬疑</option></select>
+      </div>
+    </div>
+    <div class="card">
+      <h3>新增规律</h3>
+      <form id="knowForm">
+        <input type="hidden" id="k-id">
+        <div class="grid">
+          <div><label>标题</label><input id="k-title" required placeholder="例：对话紧张时用过肩特写 + 缓推"></div>
+          <div><label>情绪</label><select id="k-emotion"><option>紧张</option><option>平静</option><option>悲伤</option><option>愤怒</option><option>喜悦</option><option>悬疑</option></select></div>
+          <div><label>场景类型</label><input id="k-scene" placeholder="对话戏 / 追逐 / 独白…"></div>
+          <div><label>节奏</label><select id="k-rhythm"><option>渐紧</option><option>渐缓</option><option>快速</option><option>缓慢</option></select></div>
+          <div><label>标签（逗号分隔）</label><input id="k-tags" placeholder="特写, 推镜, 对话"></div>
+        </div>
+        <label>用法说明</label><textarea id="k-desc"></textarea>
+        <div class="row" style="margin-top:12px"><button class="primary" type="submit">保存规律</button><button type="button" id="knowReset">清空表单</button></div>
+      </form>
+    </div>
+    <div id="knowList"></div>
+  </section>
+
+  <section id="page-storyboard" class="page">
+    <div class="card">
+      <h2>剧本转分镜</h2>
+      <p class="muted">服务端 AI 按你的知识库生成分镜（优先匹配相同情绪，其次匹配场景类型）。若 AI 未配置，会明确提示，不会编造结果。</p>
+      <div class="grid">
+        <div><label>情绪</label><select id="sb-emotion"><option>紧张</option><option>平静</option><option>悲伤</option><option>愤怒</option><option>喜悦</option><option>悬疑</option></select></div>
+        <div><label>场景类型</label><input id="sb-scene" placeholder="对话戏 / 追逐 / 独白…"></div>
+        <div><label>节奏</label><select id="sb-rhythm"><option>渐紧</option><option>渐缓</option><option>快速</option><option>缓慢</option></select></div>
+      </div>
+      <label>剧本（每行一段 / 一个场景节拍）</label>
+      <textarea id="sb-script" style="min-height:160px" placeholder="例：&#10;夜里，办公室只剩一盏灯。&#10;她推开门，看到桌上的信。&#10;他抬起头，两人对视，谁都没先开口。"></textarea>
+      <div class="row" style="margin-top:12px">
+        <button class="primary" id="sbGenerate">生成分镜</button>
+        <button id="sbCopy">复制全部</button>
+        <button id="sbExport">导出 TXT</button>
+      </div>
+    </div>
+    <div id="sbResult"></div>
+    <div class="card"><h3>生成历史</h3><div id="sbHistory"></div></div>
+  </section>
+
+  <section id="page-import" class="page">
+    <div class="card">
+      <h2>视频导入</h2>
+      <p class="muted">视频全程在浏览器本地处理，不会上传到任何服务器。切分靠画面变化检测（逐帧像素差），分析字段需你确认。</p>
+      <div id="importStatus" class="warn" style="display:none"></div>
+      <div class="row">
+        <input id="importTitle" placeholder="片名（例：《XX》第3集）" style="flex:1;min-width:220px">
+        <label style="display:inline">切分灵敏度 <input id="sensitivity" type="range" min="5" max="40" value="15" style="width:120px"> <span id="sensVal">15</span></label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <input id="videoFile" type="file" accept="video/*" style="flex:1">
+        <input id="videoUrl" placeholder="或粘贴可直接下载的视频文件链接（mp4/webm）" style="flex:2;min-width:220px">
+        <button id="loadUrl">加载链接</button>
+      </div>
+      <div id="longWarn" class="warn" style="display:none;margin-top:10px">视频超过 10 分钟，建议先截取 5–10 分钟的关键段落再导入，整集一次导入会很慢。</div>
+      <div style="margin-top:10px"><progress id="importProgress" value="0" max="100"></progress><div class="muted" id="importProgressText">未开始 · 已自动保存：—</div></div>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" id="startDetect" disabled>开始切分镜头</button>
+        <button id="cancelImport" disabled>取消</button>
+        <button id="resumeImport" style="display:none">继续导入 / 恢复</button>
+        <button id="discardDraft" style="display:none">放弃这次导入</button>
+      </div>
+      <video id="videoPlayer" controls style="width:100%;margin-top:12px;display:none"></video>
+    </div>
+
+    <div class="card">
+      <h3>字幕来源</h3>
+      <p class="muted">优先用 SRT 字幕文件（最准）。没有 SRT 时，可用画面字幕 OCR（需联网加载 Tesseract.js；若加载失败，请改用下面的手动填对白）。内嵌字幕轨浏览器一般读不到，会如实提示。</p>
+      <div class="row">
+        <input id="srtFile" type="file" accept=".srt,text/plain" style="flex:1">
+        <button id="ocrBtn">识别画面字幕（OCR）</button>
+        <span class="muted" id="subtitleStatus">未识别字幕</span>
+      </div>
+      <div class="muted" id="ocrNote"></div>
+    </div>
+
+    <div class="card">
+      <h3>导入草稿 <span class="muted" id="draftCount"></span></h3>
+      <p class="muted">导入草稿自动保存（浏览器本地缓存），切页签、刷新后仍在；批量存入拉片库后自动清除草稿。拉片库数据本身存在 Supabase。</p>
+      <div class="row">
+        <button id="batchHeuristic">批量识图前10个</button>
+        <button id="batchSequence">顺序预填（前10个）</button>
+        <button class="primary" id="batchSave">一键批量存入拉片库</button>
+      </div>
+      <div id="draftList" style="margin-top:12px"></div>
+    </div>
+  </section>
+</main>
+
+<div id="hoverPreview"><img alt="关键帧大图"><div class="meta"></div></div>
+<script src="app.js"></script>
+</body>
+</html>

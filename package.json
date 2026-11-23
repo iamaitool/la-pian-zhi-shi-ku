@@ -1,0 +1,1 @@
+{"dependencies":{"@supabase/supabase-js":"^2.45.0","express":"^4.19.2"},"description":"拉片知识库：拉片记录、视听语言知识库、剧本转分镜。部署于 Render，数据存 Supabase，AI 调用 DeepSeek（服务端）。","engines":{"node":">=18"},"main":"server.js","name":"la-pian-zhi-shi-ku","scripts":{"dev":"node server.js","start":"node server.js"},"type":"commonjs","version":"1.0.0"}
