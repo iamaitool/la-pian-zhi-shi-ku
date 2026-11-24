@@ -215,6 +215,7 @@ function ensureDraft(title){ if(!db.draft) db.draft = {title: title||'', phase:'
 function loadVideoFile(file){
   currentVideoFile = file; videoURL = URL.createObjectURL(file);
   player.src = videoURL; player.style.display='block';
+  const hint = document.getElementById('previewHint'); if(hint) hint.style.display='none';
   player.onloadedmetadata = () => { videoDuration = player.duration;
     document.getElementById('longWarn').style.display = videoDuration > 600 ? 'block' : 'none';
     document.getElementById('startDetect').disabled = false;
@@ -387,9 +388,9 @@ document.getElementById('draftList').addEventListener('click', e => {
   if(del){ db.draft.shots = db.draft.shots.filter(s=>s.id!==del.dataset.delDraft); saveDraft(); renderDraft(); return; }
   const h = e.target.closest('[data-heuristic]'); if(h){ aiPrefill(h.dataset.heuristic); return; }
   const sq = e.target.closest('[data-sequence]'); if(sq){ sequencePrefill(sq.dataset.sequence); return; }
-  /* 点某条镜头时，滑轨同步到该镜头编号（删除/预填按钮已在上面处理并返回） */
+  /* 点某条镜头时，滑轨同步到该镜头编号（删除/预填按钮已在上面处理并返回），原视频预览也跳到该镜头 */
   const row = e.target.closest('article.shot');
-  if(row){ const i = scrubRows().indexOf(row); if(i >= 0){ scrubValue = i + 1; updateScrubber(); } }
+  if(row){ const i = scrubRows().indexOf(row); if(i >= 0){ scrubValue = i + 1; updateScrubber(); previewSeekToShot(scrubValue); } }
 });
 
 /* ---- 镜头游标滑轨：拖动滑到第 N 个镜头，镜头表滚动到该镜头置顶并短暂高亮 ----
@@ -406,9 +407,12 @@ function scrubRows(){ return Array.from(document.querySelectorAll('#draftList ar
 function updateScrubber(){
   const box = document.getElementById('shotScrubber');
   const range = document.getElementById('shotScrubberRange');
+  const hint = document.getElementById('previewHint');
   const n = db.draft ? db.draft.shots.length : 0;
-  if(!n){ box.style.display = 'none'; return; }
+  if(!n){ box.style.display = 'none'; if(hint) hint.style.display='none'; return; }
   box.style.display = 'flex';
+  /* 有镜头但视频文件没加载（刷新后续跑草稿、还没重选文件）时，提示重选文件后再定位 */
+  if(hint) hint.style.display = (!currentVideoFile || !player.src) ? 'block' : 'none';
   /* 吸顶位置按实际导航高度算（窄屏导航换行变高时也不会盖住导航） */
   box.style.top = (((document.querySelector('nav') || {}).offsetHeight) || 0) + 'px';
   scrubValue = Math.min(Math.max(scrubValue || 1, 1), n);
@@ -427,6 +431,24 @@ function scrollToShot(n, smooth){
   row.classList.add('scrub-target');
   clearTimeout(scrubFlashTimer);
   scrubFlashTimer = setTimeout(() => row.classList.remove('scrub-target'), 1600);
+  previewSeekToShot(n);
+}
+/* ---- 预览联动：滑轨定位到第 N 个镜头时，原视频预览也跳到该镜头的开始时间并暂停 ----
+   只改 currentTime、绝不自动播放，方便对照原视频核对镜头信息。切分检测进行中时
+   视频正忙着逐帧采样，不联动（避免打断检测）；视频文件没加载时只显示提示，不报错。 */
+function previewSeekToShot(n){
+  const shot = db.draft && db.draft.shots[n - 1];
+  if(!shot) return;
+  const hint = document.getElementById('previewHint');
+  if(!currentVideoFile || !player.src){ if(hint) hint.style.display = 'block'; return; }
+  if(hint) hint.style.display = 'none';
+  if(!player.duration) return; /* 元数据还没加载好，等一下再拖 */
+  if(!document.getElementById('cancelImport').disabled) return; /* 检测进行中，视频正忙 */
+  try {
+    player.pause();
+    const t = parseTime(shot.start);
+    player.currentTime = Math.min(Math.max(t, 0), Math.max(player.duration - 0.01, 0));
+  } catch(e){ /* 浏览器不支持 seek 时静默忽略，不影响滑轨本身 */ }
 }
 /* 滑轨两边的 ‹ › 按钮：点一下前后移动一个镜头 */
 function scrubStep(delta){
@@ -725,7 +747,7 @@ const HELP = {
     <h4>草稿断点恢复</h4>
     <p>导入草稿会自动保存到浏览器本地缓存（localStorage），切页签、刷新后仍在；中途刷新或中断会显示「继续导入 / 恢复」，点它可从断点接着跑（若视频文件没保住，会提示你重新选择同一个视频文件）。不想要了点「放弃这次导入」。</p>
     <h4>小技巧</h4>
-    <p>鼠标停在关键帧上可看大图；草稿里每条前面的复选框可取消勾选，不想存入拉片库的镜头去掉勾即可。镜头多了可以用草稿上方的「快速定位镜头」滑轨：拖到第 N 个，下面镜头表就滚动到第 N 个镜头置顶并高亮，拖动时滑轨固定不动；滑轨两边的 ‹ › 按钮点一下前后移动一个镜头。</p>` },
+    <p>鼠标停在关键帧上可看大图；草稿里每条前面的复选框可取消勾选，不想存入拉片库的镜头去掉勾即可。镜头多了可以用草稿上方的「快速定位镜头」滑轨：拖到第 N 个，下面镜头表就滚动到第 N 个镜头置顶并高亮，拖动时滑轨固定不动；滑轨两边的 ‹ › 按钮点一下前后移动一个镜头。拖滑轨、点箭头或点某条镜头时，草稿上方的原视频预览也会跳到该镜头的开始时间并暂停，方便对照原视频核对信息；若刷新后还没重新选择视频文件，预览下方会提示重选同一文件后再定位。</p>` },
 };
 function openHelp(key){
   const h = HELP[key]; if(!h) return;
