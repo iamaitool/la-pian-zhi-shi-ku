@@ -1,4 +1,4 @@
-# 拉片知识库（Render + Supabase + DeepSeek 全栈版）
+# 拉片知识库（Render + Neon + DeepSeek 全栈版）
 
 通过不断拉片，积累视听语言知识库；下次输入剧本，按知识库生成分镜和视频提示词。
 
@@ -20,16 +20,14 @@
    - `AI_API_KEY`：DeepSeek 的 API 密钥
    - `AI_BASE_URL`：DeepSeek 接口地址，例如 `https://api.deepseek.com`
    - `AI_MODEL`：模型名，例如 `deepseek-flash`
-   - `SUPABASE_URL`：Supabase 项目地址，例如 `https://your-project.supabase.co`
-   - `SUPABASE_SERVICE_ROLE_KEY`：Supabase 的 service_role 密钥（只放服务端，绝不发给浏览器）
-   - `SUPABASE_ANON_KEY`（可选，本应用服务端不直接用它）
-3. 部署完成后打开 Render 给的地址即可使用。健康检查：`/api/health` 会返回 AI / Supabase 是否已配置（不返回任何密钥值）。
+   - `DATABASE_URL`：Neon Postgres 的池化连接串（`neon deploy` 后从 `.env.local` 里复制，或在 Neon 控制台取；只放服务端，绝不发给浏览器）
+3. 部署完成后打开 Render 给的地址即可使用。健康检查：`/api/health` 会返回 AI / Neon 是否已配置（不返回任何密钥值）。
 
-## 创建 Supabase 表
+## 创建 Neon 表
 
-Supabase 控制台 → SQL Editor → 粘贴 `supabase/schema.sql` 的全部内容 → Run。
+本地跑 `node scripts/apply-schema.js`（读 `.env.local` 里的 `DATABASE_URL_UNPOOLED`），或在 Neon 控制台 SQL Editor 里粘贴 `neon/schema.sql` 执行。
 建表：`shots`（拉片）、`knowledge_items`（知识库）、`storyboards`（分镜历史）、`import_drafts`（导入草稿，可选）。
-脚本已开启 RLS；服务端用 service_role 密钥读写，浏览器不直连 Supabase。如需浏览器直连，请自行在控制台添加 policy。
+浏览器不直连数据库，所有请求都走服务端；因此建表脚本不开启 RLS。Neon Auth 与 Realtime 已在项目里开通，但本应用无登录、无实时查询，未接入；AI 不走 Neon AI Gateway（该账号暂无可用模型额度），继续用 DeepSeek。
 
 ## 本地运行
 
@@ -46,8 +44,8 @@ npm start              # 打开 http://localhost:3000/
 
 ## 数据存储
 
-拉片、知识库、分镜历史存在 Supabase（`shots` / `knowledge_items` / `storyboards` 表）。
-如果未配置 Supabase，服务仍能启动并用内存存储，同时在日志里警告；**内存存储重启后会丢失**，部署时务必配置 Supabase。
+拉片、知识库、分镜历史存在 Neon Postgres（`shots` / `knowledge_items` / `storyboards` 表）。
+如果未配置 Neon，服务仍能启动并用内存存储，同时在日志里警告；**内存存储重启后会丢失**，部署时务必配置 Neon。关键帧仍以 data URL 存在 `shots.thumb` 列，未迁移到 Neon Object Storage（`assets` 桶已开通，如需迁移再做）。
 视频导入草稿只存在浏览器 localStorage（离线缓存），批量存入拉片库后清除。
 示例数据（5 条拉片、5 条知识）带“示例”标记，可用“一键清空示例”删除，不会删你的数据。
 
@@ -62,10 +60,12 @@ npm start              # 打开 http://localhost:3000/
 
 - `server.js` — Express 服务：静态前端 + `/api` 接口
 - `lib/ai.js` — DeepSeek 调用（服务端专用）
-- `lib/store.js` — Supabase 数据层（未配置时降级内存存储）
+- `lib/store.js` — Neon Postgres 数据层（@neondatabase/serverless，HTTP 传输；未配置时降级内存存储）
 - `lib/seed.js` — 示例数据
 - `public/index.html` / `public/styles.css` / `public/app.js` — 前端
-- `supabase/schema.sql` — 建表脚本
+- `neon/schema.sql` — 建表脚本（Neon）
+- `scripts/apply-schema.js` — 执行建表脚本（用直连串）
+- `supabase/schema.sql` — 旧版建表脚本（Supabase，已停用，留作对照）
 - `render.yaml` — Render 部署配置
 - `.env.example` — 环境变量模板（占位符）
 - `package.json` — 依赖与启动脚本

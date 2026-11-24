@@ -1,5 +1,5 @@
-/* 拉片知识库 — Render + Supabase + DeepSeek 全栈版（前端）
-   数据 CRUD 走 /api（服务端 → Supabase；未配 Supabase 时服务端用内存存储）。
+/* 拉片知识库 — Render + Neon + DeepSeek 全栈版（前端）
+   数据 CRUD 走 /api（服务端 → Neon Postgres；未配 Neon 时服务端用内存存储）。
    AI 功能（识图预填 / 顺序预填 / 剧本转分镜）走 /api/ai/*（服务端调用 DeepSeek，
    密钥只在服务端，绝不发给浏览器）。AI 未配置时明确提示，绝不编造结果。
    localStorage 只用作视频导入草稿的离线缓存。 */
@@ -49,7 +49,7 @@ async function refreshHealth() {
     const h = await api('/api/health');
     const el = document.getElementById('aiStatus');
     if (el) el.textContent = (h.aiConfigured ? 'AI 已配置（DeepSeek，服务端调用）' : 'AI 未配置：' + AI_NOT_CONFIGURED_MSG) +
-      ' · 数据：' + (h.supabaseConfigured ? 'Supabase 已连接' : 'Supabase 未配置，当前为内存存储（重启会丢）');
+      ' · 数据：' + (h.neonConfigured ? "Neon 已连接" : "Neon 未配置，当前为内存存储（重启会丢）");
   } catch (e) { /* 健康检查失败不阻塞页面 */ }
 }
 
@@ -399,7 +399,7 @@ document.addEventListener('click', e => {
 /* ---- init ---- */
 (async () => {
   db.draft = loadDraftFromCache();
-  try { await refreshData(); } catch (err) { alert('加载数据失败：' + err.message + '。请确认服务已启动、Supabase 已配置。'); }
+  try { await refreshData(); } catch (err) { alert('加载数据失败：' + err.message + '。请确认服务已启动、Neon 已配置。'); }
   refreshHealth();
   renderShots(); renderKnowledge(); renderHistory(); renderDraft();
   if(db.draft && db.draft.shots.length){

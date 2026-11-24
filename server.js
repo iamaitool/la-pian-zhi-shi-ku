@@ -1,8 +1,8 @@
 'use strict';
-/* 拉片知识库 — Render + Supabase + DeepSeek 全栈版
+/* 拉片知识库 — Render + Neon + DeepSeek 全栈版
    启动：node server.js（端口取 process.env.PORT，默认 3000）
    环境变量（见 .env.example）：AI_API_KEY / AI_BASE_URL / AI_MODEL、
-   SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY。
+   DATABASE_URL（Neon Postgres，池化连接串）。
    AI 密钥只在服务端使用，绝不发给浏览器。 */
 const path = require('path');
 const express = require('express');
@@ -24,7 +24,7 @@ function aiErrorResponse(res, err) {
 
 /* ---- 健康检查：只返回是否已配置，不返回任何密钥值 ---- */
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, aiConfigured: ai.aiConfig().configured, supabaseConfigured: store.configured });
+  res.json({ ok: true, aiConfigured: ai.aiConfig().configured, neonConfigured: store.configured });
 });
 
 /* ---- 拉片 CRUD ---- */
@@ -107,5 +107,5 @@ store.seedIfEmpty().catch((e) => console.error('[store] 示例数据写入失败
 app.listen(PORT, () => {
   console.log(`[server] 拉片知识库已启动，端口 ${PORT}`);
   console.log(`[server] AI 已配置：${ai.aiConfig().configured}（模型名不打印密钥）`);
-  console.log(`[server] Supabase 已配置：${store.configured}`);
+  console.log(`[server] Neon 已配置：${store.configured}`);
 });
