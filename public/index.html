@@ -13,10 +13,10 @@
   <p class="muted" id="aiStatus">正在检查 AI / 数据库配置…</p>
 </header>
 <nav>
+  <button data-page="import">视频导入</button>
   <button data-page="shots" class="active">拉片库</button>
   <button data-page="knowledge">视听语言知识库</button>
   <button data-page="storyboard">剧本转分镜</button>
-  <button data-page="import">视频导入</button>
 </nav>
 <main>
   <section id="page-shots" class="page active">
@@ -24,7 +24,7 @@
       <h2>拉片库 <span class="muted" id="shotCount"></span> <button type="button" class="help-btn" data-help="shots" aria-label="拉片库帮助">?</button></h2>
       <div class="row">
         <input id="shotSearch" placeholder="搜索：片名 / 场景 / 对白 / 景别…" style="flex:1;min-width:220px">
-        <select id="shotFilterEmotion" style="width:160px"><option value="">全部情绪</option><option>紧张</option><option>平静</option><option>悲伤</option><option>愤怒</option><option>喜悦</option><option>悬疑</option></select>
+        <select id="shotFilterEmotion" style="width:160px"></select>
         <button id="clearSamples">一键清空示例</button>
       </div>
       <p class="muted">鼠标停在截图上可看大图（手机点一下打开）。示例数据带“示例”标记，清空示例不会删你的数据。</p>
@@ -37,7 +37,7 @@
           <div><label>片名 / 场次</label><input id="f-title" placeholder="例：《XX》第3集 · 办公室对峙" required></div>
           <div><label>开始时间码</label><input id="f-start" placeholder="00:00" value="00:00"></div>
           <div><label>时长（秒）</label><input id="f-duration" type="number" min="0" step="0.1" placeholder="5"></div>
-          <div><label>情绪</label><select id="f-emotion"><option>紧张</option><option>平静</option><option>悲伤</option><option>愤怒</option><option>喜悦</option><option>悬疑</option></select></div>
+          <div><label>情绪</label><select id="f-emotion"></select></div>
           <div><label>景别</label><input id="f-shotSize" placeholder="特写 / 近景 / 中景 / 全景 / 远景"></div>
           <div><label>机位</label><input id="f-camera" placeholder="平视 / 仰拍 / 俯拍 / 过肩"></div>
           <div><label>构图</label><input id="f-composition" placeholder="三分法 / 对称 / 框式…"></div>
@@ -67,7 +67,7 @@
       <h2>视听语言知识库 <span class="muted" id="knowCount"></span> <button type="button" class="help-btn" data-help="knowledge" aria-label="知识库帮助">?</button></h2>
       <div class="row">
         <input id="knowSearch" placeholder="搜索规律 / 标签…" style="flex:1;min-width:220px">
-        <select id="knowFilterEmotion" style="width:160px"><option value="">全部情绪</option><option>紧张</option><option>平静</option><option>悲伤</option><option>愤怒</option><option>喜悦</option><option>悬疑</option></select>
+        <select id="knowFilterEmotion" style="width:160px"></select>
       </div>
     </div>
     <div class="card">
@@ -76,7 +76,7 @@
         <input type="hidden" id="k-id">
         <div class="grid">
           <div><label>标题</label><input id="k-title" required placeholder="例：对话紧张时用过肩特写 + 缓推"></div>
-          <div><label>情绪</label><select id="k-emotion"><option>紧张</option><option>平静</option><option>悲伤</option><option>愤怒</option><option>喜悦</option><option>悬疑</option></select></div>
+          <div><label>情绪</label><select id="k-emotion"></select></div>
           <div><label>场景类型</label><input id="k-scene" placeholder="对话戏 / 追逐 / 独白…"></div>
           <div><label>节奏</label><select id="k-rhythm"><option>渐紧</option><option>渐缓</option><option>快速</option><option>缓慢</option></select></div>
           <div><label>标签（逗号分隔）</label><input id="k-tags" placeholder="特写, 推镜, 对话"></div>
@@ -93,7 +93,7 @@
       <h2>剧本转分镜 <button type="button" class="help-btn" data-help="storyboard" aria-label="剧本转分镜帮助">?</button></h2>
       <p class="muted">服务端 AI 按你的知识库生成分镜（优先匹配相同情绪，其次匹配场景类型）。若 AI 未配置，会明确提示，不会编造结果。</p>
       <div class="grid">
-        <div><label>情绪</label><select id="sb-emotion"><option>紧张</option><option>平静</option><option>悲伤</option><option>愤怒</option><option>喜悦</option><option>悬疑</option></select></div>
+        <div><label>情绪</label><select id="sb-emotion"></select></div>
         <div><label>场景类型</label><input id="sb-scene" placeholder="对话戏 / 追逐 / 独白…"></div>
         <div><label>节奏</label><select id="sb-rhythm"><option>渐紧</option><option>渐缓</option><option>快速</option><option>缓慢</option></select></div>
       </div>
@@ -118,6 +118,7 @@
         <input id="importTitle" placeholder="片名（例：《XX》第3集）" style="flex:1;min-width:220px">
         <label style="display:inline">切分灵敏度 <input id="sensitivity" type="range" min="5" max="40" value="15" style="width:120px"> <span id="sensVal">15</span></label>
       </div>
+      <div class="muted" id="sensHint" style="margin-top:6px"></div>
       <div class="row" style="margin-top:10px">
         <input id="videoFile" type="file" accept="video/*" style="flex:1">
         <input id="videoUrl" placeholder="或粘贴可直接下载的视频文件链接（mp4/webm）" style="flex:2;min-width:220px">

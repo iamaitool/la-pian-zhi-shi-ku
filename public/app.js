@@ -8,6 +8,25 @@ const DRAFT_LS = 'lapian-fullstack-draft-v1';
 const FIELDS = ['shotSize','camera','composition','movement','lighting','content','action','emotion','dialogue','music','sfx','transition','montage','why'];
 const FIELD_LABEL = {shotSize:'景别',camera:'机位',composition:'构图',movement:'运镜',lighting:'光线',content:'画面内容',action:'人物动作',emotion:'情绪',dialogue:'对白',music:'背景音乐',sfx:'音效',transition:'转场方式',montage:'蒙太奇运用',why:'为什么这样用'};
 const AI_NOT_CONFIGURED_MSG = 'AI 未配置，请在 Render 环境变量里设置 AI_API_KEY / AI_BASE_URL / AI_MODEL';
+/* 情绪选项：拉片库 / 视听语言知识库 / 剧本转分镜三处共用同一份清单（12 个），
+   改这里即可同步所有下拉框。旧数据里已有的 6 个情绪都在清单里，不会丢。 */
+const EMOTIONS = ['紧张','悬疑','温馨','悲伤','喜悦','浪漫','愤怒','恐惧','平静','压抑','震撼','孤独'];
+function fillEmotionSelects(){
+  const fill = (id, withAll) => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = (withAll ? '<option value="">全部情绪</option>' : '') +
+      EMOTIONS.map(e => `<option>${e}</option>`).join('');
+    if (cur && EMOTIONS.includes(cur)) sel.value = cur;
+  };
+  fill('shotFilterEmotion', true);
+  fill('f-emotion', false);
+  fill('knowFilterEmotion', true);
+  fill('k-emotion', false);
+  fill('sb-emotion', false);
+}
+fillEmotionSelects();
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtTime = s => { s = Math.max(0, Math.round(s||0)); const m = Math.floor(s/60), ss = String(s%60).padStart(2,'0'); return String(m).padStart(2,'0') + ':' + ss; };
@@ -209,7 +228,21 @@ function updateSegmentUI(){
   sel.disabled = !!(d && d.segmented && Array.isArray(d.segments) && d.segments.some(s => s.status === 'done' || s.status === 'saved' || s.status === 'processing'));
 }
 const player = document.getElementById('videoPlayer');
-document.getElementById('sensitivity').addEventListener('input', e => document.getElementById('sensVal').textContent = e.target.value);
+/* 切分灵敏度：拖动时实时说明当前值意味着什么（input 事件，拖动中持续更新） */
+function sensHintText(v){
+  if (v <= 10) return '低灵敏度：只在画面变化很大时才切分，切得少，慢镜头不容易被拆开，但可能把真实的切换并成一个镜头。';
+  if (v <= 20) return '中等灵敏度：常规切分，适合大多数剧情片；缓慢推拉、光线渐变一般不会被误切。';
+  if (v <= 30) return '较高灵敏度：切得更细，缓慢推拉或光线变化也可能被切成新镜头，适合节奏快的片子。';
+  return '高灵敏度：切得最细，轻微的画面变化都会切分，容易把一个镜头拆成多个，之后需要手动合并。';
+}
+function updateSensHint(){
+  const s = document.getElementById('sensitivity');
+  document.getElementById('sensVal').textContent = s.value;
+  const hint = document.getElementById('sensHint');
+  if (hint) hint.textContent = '当前灵敏度 ' + s.value + '：' + sensHintText(Number(s.value));
+}
+document.getElementById('sensitivity').addEventListener('input', updateSensHint);
+updateSensHint();
 function setProgress(p, text){ document.getElementById('importProgress').value=p; document.getElementById('importProgressText').textContent = text + (db.draft && db.draft.savedAt ? ' · 已自动保存：'+db.draft.savedAt : ''); }
 function ensureDraft(title){ if(!db.draft) db.draft = {title: title||'', phase:'准备导入', shots:[], savedAt:''}; return db.draft; }
 function loadVideoFile(file){
@@ -684,7 +717,7 @@ const HELP = {
     <h4>一条规律包含什么</h4>
     <ul>
       <li><b>标题</b>：一句话说清规律，例如“对话紧张时用过肩特写 + 缓推”。</li>
-      <li><b>情绪</b>：紧张 / 平静 / 悲伤 / 愤怒 / 喜悦 / 悬疑，分镜匹配时优先按情绪找。</li>
+      <li><b>情绪</b>：紧张 / 悬疑 / 温馨 / 悲伤 / 喜悦 / 浪漫 / 愤怒 / 恐惧 / 平静 / 压抑 / 震撼 / 孤独（共 12 个，两页统一），分镜匹配时优先按情绪找。</li>
       <li><b>场景类型</b>：对话戏 / 追逐 / 独白等，情绪相同或没有匹配时再按场景找。</li>
       <li><b>节奏</b>：渐紧 / 渐缓 / 快速 / 缓慢。</li>
       <li><b>标签</b>：用逗号分隔，如“特写, 推镜, 对话”，方便搜索。</li>
