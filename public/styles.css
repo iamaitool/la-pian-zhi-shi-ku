@@ -80,3 +80,6 @@ progress{width:100%;height:10px}
   .help-overlay{align-items:flex-end;padding:0}
   .help-dialog{max-width:none;max-height:88vh;border-radius:16px 16px 0 0;padding:20px 18px 28px}
 }
+/* 生成历史：可点击还原的条目 */
+.history-item{display:block;width:100%;text-align:left;background:#fff;border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin:4px 0;cursor:pointer;font-size:14px;color:inherit}
+.history-item:hover{background:#f9fafb;border-color:#9ca3af}

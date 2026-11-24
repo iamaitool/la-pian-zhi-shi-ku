@@ -251,6 +251,15 @@ document.getElementById('knowList').addEventListener('click', async e => {
 
 /* ---- storyboard（服务端 AI，按知识库生成） ---- */
 let lastStoryboard = '';
+/* 把分镜行渲染成分镜表，并重建 lastStoryboard（复制/导出用的纯文本）；
+   生成后和点历史还原时共用。 */
+function renderStoryboardResult(rows){
+  rows = Array.isArray(rows) ? rows : [];
+  lastStoryboard = rows.map(r=>`镜头 ${r.n}（${r.shotSize}）\n剧本：${r.line}\n依据：${r.rule}\n中文提示词：${r.promptZh}\n英文提示词：${r.promptEn}\n`).join('\n');
+  document.getElementById('sbResult').innerHTML = rows.length ? `<div class="card"><h3>分镜表</h3>
+    <table><tr><th>镜头</th><th>剧本</th><th>景别</th><th>依据</th><th>中文提示词</th><th>英文提示词</th></tr>
+    ${rows.map(r=>`<tr><td>${r.n}</td><td>${esc(r.line)}</td><td>${esc(r.shotSize)}</td><td>${esc(r.rule)}</td><td>${esc(r.promptZh)}</td><td>${esc(r.promptEn)}</td></tr>`).join('')}</table></div>` : '';
+}
 document.getElementById('sbGenerate').addEventListener('click', async () => {
   const script = document.getElementById('sb-script').value.trim();
   if(!script){ alert('请先粘贴一段剧本。'); return; }
@@ -259,10 +268,7 @@ document.getElementById('sbGenerate').addEventListener('click', async () => {
   try {
     const out = await aiApi('/api/ai/storyboard', { script, emotion, sceneType: scene, rhythm, knowledge: db.knowledge });
     const rows = out.shots || [];
-    lastStoryboard = rows.map(r=>`镜头 ${r.n}（${r.shotSize}）\n剧本：${r.line}\n依据：${r.rule}\n中文提示词：${r.promptZh}\n英文提示词：${r.promptEn}\n`).join('\n');
-    document.getElementById('sbResult').innerHTML = `<div class="card"><h3>分镜表</h3>
-      <table><tr><th>镜头</th><th>剧本</th><th>景别</th><th>依据</th><th>中文提示词</th><th>英文提示词</th></tr>
-      ${rows.map(r=>`<tr><td>${r.n}</td><td>${esc(r.line)}</td><td>${esc(r.shotSize)}</td><td>${esc(r.rule)}</td><td>${esc(r.promptZh)}</td><td>${esc(r.promptEn)}</td></tr>`).join('')}</table></div>`;
+    renderStoryboardResult(rows);
     await api('/api/storyboards', { method: 'POST', body: JSON.stringify({ script, emotion, scene, rhythm, lines: script.split('\n').filter(Boolean).length, shots: rows }) });
     await refreshData(); renderHistory();
   } catch (err) {
@@ -271,9 +277,23 @@ document.getElementById('sbGenerate').addEventListener('click', async () => {
 });
 function renderHistory(){
   document.getElementById('sbHistory').innerHTML = db.history.length
-    ? db.history.slice(0,10).map(h=>`<p>· ${esc(h.created_at || h.at || '')} · ${esc(h.emotion)} / ${esc(h.scene||'—')} · ${h.lines} 行剧本</p>`).join('')
+    ? db.history.slice(0,10).map(h=>`<button type="button" class="history-item" data-history-id="${esc(h.id)}" title="点击还原这次生成">· ${esc(h.created_at || h.at || '')} · ${esc(h.emotion)} / ${esc(h.scene||'—')} · ${h.lines} 行剧本 <span class="muted">点击还原</span></button>`).join('')
     : '<p class="muted">暂无历史。</p>';
 }
+/* 点击历史记录还原：把当时的剧本/情绪/场景/节奏填回表单，分镜表重新显示，
+   复制全部和导出 TXT 都用还原后的内容。只读历史，不新增记录、不改历史。 */
+document.getElementById('sbHistory').addEventListener('click', e => {
+  const btn = e.target.closest('[data-history-id]');
+  if(!btn) return;
+  const h = db.history.find(x => String(x.id) === String(btn.dataset.historyId));
+  if(!h) return;
+  document.getElementById('sb-script').value = h.script || '';
+  document.getElementById('sb-emotion').value = h.emotion || '';
+  document.getElementById('sb-scene').value = h.scene || '';
+  document.getElementById('sb-rhythm').value = h.rhythm || '渐紧';
+  renderStoryboardResult(h.shots || []);
+  document.getElementById('sbResult').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
 document.getElementById('sbCopy').addEventListener('click', async () => { if(!lastStoryboard) return alert('请先生成分镜。'); await navigator.clipboard.writeText(lastStoryboard).catch(()=>{}); alert('已复制。'); });
 document.getElementById('sbExport').addEventListener('click', () => { if(!lastStoryboard) return alert('请先生成分镜。'); const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([lastStoryboard],{type:'text/plain;charset=utf-8'})); a.download='分镜表.txt'; a.click(); });
 
@@ -955,7 +975,7 @@ const HELP = {
     <ul>
       <li>「复制全部」：把整张分镜表（含中英文提示词）复制到剪贴板。</li>
       <li>「导出 TXT」：下载一份分镜表 .txt 文件。</li>
-      <li>每次生成都会保存到「生成历史」，可查看最近 10 次。</li>
+      <li>每次生成都会保存到「生成历史」，可查看最近 10 次；点任意一条历史可还原当时的剧本、情绪、场景、节奏和分镜表。</li>
     </ul>
     <h4>注意事项</h4>
     <ul>
