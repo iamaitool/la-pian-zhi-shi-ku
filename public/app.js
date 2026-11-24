@@ -378,7 +378,10 @@ async function detectShots(fromSec, opts){
   const label = opts.label ? opts.label + ' · ' : '';
   detectCancelled = false; document.getElementById('cancelImport').disabled=false;
   const draft = ensureDraft(document.getElementById('importTitle').value || '未命名');
-  draft.phase = label + '切分检测中'; const threshold = Number(document.getElementById('sensitivity').value);
+  /* 滑条值是“灵敏度”（越大越敏感、切得越细），而这里需要的是像素差阈值（越大越难触发切分），
+     所以要反向换算：灵敏度 5 → 阈值 40（切得少），灵敏度 40 → 阈值 5（切得最细）。
+     直接用滑条值当阈值会反过来：灵敏度 5 时几乎任何微小变化都切分，切出最多镜头。 */
+  draft.phase = label + '切分检测中'; const threshold = 45 - Number(document.getElementById('sensitivity').value);
   const canvas = document.createElement('canvas'); canvas.width=160; canvas.height=90; const ctx = canvas.getContext('2d');
   const step = 0.5; let prev = null, cutTimes = [fromSec], hitCap = false;
   const total = endSec, spanLen = Math.max(0.001, total - fromSec);
