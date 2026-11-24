@@ -95,9 +95,22 @@ function shotCard(s, i){
     <table style="margin-top:10px">${rows}</table>
   </article>`;
 }
-/* ---- 从一条拉片生成知识库条目（单条提炼与批量存入共用，保证一致） ---- */
+/* ---- 从一条拉片生成知识库条目（单条提炼、批量存入、草稿存知识库共用，保证一致） ----
+   用法说明保留镜头全部已填字段，按画面 / 声音 / 衔接 / 用意分组；空字段和“待填写”占位不写入 ---- */
 function shotToKnowledge(s){
-  return {title:`${s.emotion||'某情绪'}时：${s.shotSize||''}${s.movement? ' + '+s.movement:''}（来自 ${s.title}）`,emotion:s.emotion||'紧张',scene:'',rhythm:'渐紧',tags:[s.shotSize,s.movement].filter(Boolean),desc:s.why||`${s.composition||''}；${s.lighting||''}`,sample:false};
+  const kv = v => { const t = String(v ?? '').trim(); return (t && t !== '待填写') ? t : ''; };
+  const part = pairs => pairs.map(([label, val]) => kv(val) ? `${label}：${kv(val)}` : '').filter(Boolean).join('；');
+  const groups = [];
+  const pic = part([['景别', s.shotSize], ['机位', s.camera], ['构图', s.composition], ['运镜', s.movement], ['光线', s.lighting], ['画面内容', s.content], ['人物动作', s.action]]);
+  if (pic) groups.push('【画面】' + pic);
+  const snd = part([['背景音乐', s.music], ['音效', s.sfx], ['对白', s.dialogue]]);
+  if (snd) groups.push('【声音】' + snd);
+  const link = part([['转场', s.transition], ['蒙太奇', s.montage]]);
+  if (link) groups.push('【衔接】' + link);
+  const why = kv(s.why);
+  if (why) groups.push('【用意】' + why);
+  const tags = [...new Set([s.shotSize, s.movement, s.camera, s.composition, s.lighting, s.montage].map(kv).filter(Boolean))].slice(0, 6);
+  return {title:`${s.emotion||'某情绪'}时：${s.shotSize||''}${s.movement? ' + '+s.movement:''}（来自 ${s.title}）`,emotion:s.emotion||'紧张',scene:'',rhythm:'渐紧',tags,desc:groups.join('；'),sample:false};
 }
 /* 当前拉片库列表（与 renderShots 同一套搜索 + 情绪筛选） */
 function filteredShots(){
@@ -165,8 +178,16 @@ document.getElementById('shotList').addEventListener('click', async e => {
     const map={title:'f-title',start:'f-start',duration:'f-duration',emotion:'f-emotion',shotSize:'f-shotSize',camera:'f-camera',composition:'f-composition',movement:'f-movement',lighting:'f-lighting',content:'f-content',action:'f-action',dialogue:'f-dialogue',music:'f-music',sfx:'f-sfx',transition:'f-transition',montage:'f-montage',why:'f-why'};
     Object.entries(map).forEach(([k,el])=>document.getElementById(el).value=s[k]??''); window.scrollTo({top:0,behavior:'smooth'}); }
   if(ex){ const s=db.shots.find(x=>x.id===ex.dataset.extract); if(!s) return;
-    await api('/api/knowledge', { method: 'POST', body: JSON.stringify(shotToKnowledge(s)) });
-    await refreshData(); renderKnowledge(); alert('已提炼到知识库，可在知识库页修改。'); }
+    const btn = ex; btn.disabled = true; btn.textContent = '提炼中…';
+    const done = msg => { btn.textContent = msg; setTimeout(()=>{ btn.disabled = false; btn.textContent = '提炼到知识库'; }, 1800); };
+    try {
+      const rec = shotToKnowledge(s);
+      await refreshData(); /* 拿最新知识库标题，已在库里的不重复存 */
+      if (db.knowledge.some(k => k.title === rec.title)) { done('已在库里 ✓'); return; }
+      await api('/api/knowledge', { method: 'POST', body: JSON.stringify(rec) });
+      await refreshData(); renderKnowledge();
+      done('已提炼 ✓');
+    } catch (err) { done('提炼失败'); } }
 });
 
 /* ---- knowledge ---- */
@@ -481,16 +502,15 @@ async function extractDraftShot(id, btn){
   const s = db.draft && db.draft.shots.find(x => x.id === id); if(!s) return;
   const rec = shotToKnowledge(s);
   if(btn){ btn.disabled = true; btn.textContent = '正在存入…'; }
+  const done = msg => { if(!btn) return; btn.textContent = msg; setTimeout(()=>{ btn.disabled = false; btn.textContent = '存知识库'; }, 1800); };
   try {
     await refreshData(); /* 拿最新的知识库标题，避免重复存入 */
-    if (db.knowledge.some(k => k.title === rec.title)) { alert('这条已经在知识库里了，没有重复存入。'); return; }
+    if (db.knowledge.some(k => k.title === rec.title)) { done('已在库里 ✓'); return; }
     await api('/api/knowledge', { method: 'POST', body: JSON.stringify(rec) });
     await refreshData(); renderKnowledge();
-    alert('已存入知识库，可在知识库页查看和修改。');
+    done('已存入 ✓');
   } catch (err) {
-    alert('存入知识库失败：' + String(err.message || err));
-  } finally {
-    if(btn){ btn.disabled = false; btn.textContent = '存知识库'; }
+    done('存入失败');
   }
 }
 
