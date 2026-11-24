@@ -181,6 +181,33 @@ document.getElementById('sbExport').addEventListener('click', () => { if(!lastSt
 
 /* ---- video import: scene detection（浏览器本地） ---- */
 let videoURL = null, videoDuration = 0, detectCancelled = false, currentVideoFile = null;
+let segmentDurationSec = 600; /* 分段导入默认每段 10 分钟 */
+/* ---- 分段导入：长视频按固定时长切成若干段，逐段顺序处理 ----
+   computeSegments 是纯函数（便于单测）：返回 [{index, start, end}]，
+   start/end 为原片绝对秒数；每段最多 300 个镜头（上限在 detectShots 里执行）。 */
+function computeSegments(duration, segSec){
+  const segs = [];
+  if (!(duration > 0) || !(segSec > 0)) return segs;
+  const n = Math.ceil(duration / segSec);
+  for (let i = 0; i < n; i++) segs.push({ index: i, start: i * segSec, end: Math.min(duration, (i + 1) * segSec) });
+  return segs;
+}
+function updateSegmentUI(){
+  const panel = document.getElementById('segmentPanel');
+  const info = document.getElementById('segmentInfo');
+  const sel = document.getElementById('segmentDuration');
+  if (!panel || !info || !sel) return;
+  if (!videoDuration) { panel.style.display = 'none'; return; }
+  const segs = computeSegments(videoDuration, segmentDurationSec);
+  if (segs.length <= 1) { panel.style.display = 'none'; return; }
+  panel.style.display = 'block';
+  const d = db.draft;
+  const done = (d && d.segmented && Array.isArray(d.segments)) ? d.segments.filter(s => s.status === 'done' || s.status === 'saved').length : 0;
+  info.textContent = `视频总长 ${fmtTime(videoDuration)}，按每段 ${segmentDurationSec / 60} 分钟可切成 ${segs.length} 段` +
+    (done ? `（已完成 ${done}/${segs.length} 段）` : '') + '。一段一段顺序处理，不会同时跑。';
+  /* 已有分段进度时不允许改每段时长，避免新旧分段对不上；想换时长请先放弃草稿 */
+  sel.disabled = !!(d && d.segmented && Array.isArray(d.segments) && d.segments.some(s => s.status === 'done' || s.status === 'saved' || s.status === 'processing'));
+}
 const player = document.getElementById('videoPlayer');
 document.getElementById('sensitivity').addEventListener('input', e => document.getElementById('sensVal').textContent = e.target.value);
 function setProgress(p, text){ document.getElementById('importProgress').value=p; document.getElementById('importProgressText').textContent = text + (db.draft && db.draft.savedAt ? ' · 已自动保存：'+db.draft.savedAt : ''); }
@@ -206,41 +233,99 @@ document.getElementById('cancelImport').addEventListener('click', () => { detect
 document.getElementById('resumeImport').addEventListener('click', async () => {
   document.getElementById('resumeImport').style.display='none';
   if(!currentVideoFile){ alert('视频文件未保存在浏览器中，请重新选择同一个视频文件，系统会从断点继续。'); return; }
-  const d = ensureDraft(); const from = d.shots.length ? parseTime(d.shots[d.shots.length-1].start) + (d.shots[d.shots.length-1].duration||0) : 0;
+  const d = ensureDraft();
+  if (d.segmented && Array.isArray(d.segments) && d.segments.length) { await runSegmentedImport(); return; }
+  const from = d.shots.length ? parseTime(d.shots[d.shots.length-1].start) + (d.shots[d.shots.length-1].duration||0) : 0;
   await detectShots(from);
 });
 document.getElementById('discardDraft').addEventListener('click', () => { if(confirm('放弃这次导入草稿？')){ db.draft=null; try{localStorage.removeItem(DRAFT_LS);}catch(e){} renderDraft(); document.getElementById('resumeImport').style.display='none'; document.getElementById('discardDraft').style.display='none'; document.getElementById('importStatus').style.display='none'; } });
+document.getElementById('segmentDuration').addEventListener('change', e => { segmentDurationSec = Number(e.target.value) || 600; updateSegmentUI(); });
+document.getElementById('startSegmented').addEventListener('click', async () => { await runSegmentedImport(); });
 
-async function detectShots(fromSec){
+/* ---- 分段导入：逐段顺序处理，绝不并行 ----
+   每段走同一套 detectShots（只限本段时间范围 [start, end]），镜头的时间码
+   是原片绝对时间（fmtTime(start)），不会从 0:00 重算。已完成的分段跳过；
+   中途取消或刷新后，已完成的分段保留在草稿里，恢复时从下一段接着跑。 */
+async function runSegmentedImport(){
+  const draft = ensureDraft(document.getElementById('importTitle').value || '未命名');
+  if (!videoDuration) return alert('请先加载视频。');
+  if (draft.shots.length && !draft.segmented) return alert('当前草稿已有单次导入的镜头，请先点「一键批量存入拉片库」保存，或点「放弃这次导入」清空草稿，再开始分段导入。');
+  const segs = computeSegments(videoDuration, segmentDurationSec);
+  if (segs.length <= 1) return alert('视频在一分段时长内，不需要分段导入，点「开始切分镜头」即可。');
+  if (!draft.segmented || !Array.isArray(draft.segments) || draft.segments.length !== segs.length || draft.segmentDuration !== segmentDurationSec) {
+    /* 只有没有任何一段已完成时才允许重建分段，避免丢进度 */
+    if (draft.segmented && Array.isArray(draft.segments) && draft.segments.some(s => s.status === 'done' || s.status === 'saved')) {
+      return alert('已有已完成的分段（每段 ' + (draft.segmentDuration / 60) + ' 分钟），改每段时长会丢进度；想换时长请先点「放弃这次导入」清空草稿。');
+    }
+    draft.segmented = true; draft.segmentDuration = segmentDurationSec;
+    draft.segments = segs.map(s => ({ ...s, status: 'pending', shotCount: 0 }));
+  }
+  detectCancelled = false;
+  document.getElementById('cancelImport').disabled = false;
+  document.getElementById('startSegmented').disabled = true;
+  document.getElementById('startDetect').disabled = true;
+  try {
+    for (let i = 0; i < draft.segments.length; i++) {
+      const seg = draft.segments[i];
+      if (seg.status === 'done' || seg.status === 'saved') continue;
+      seg.status = 'processing';
+      draft.phase = `正在处理第 ${i + 1}/${draft.segments.length} 段`;
+      saveDraft(); renderDraft();
+      await detectShots(seg.start, { endSec: seg.end, segmentIndex: seg.index, progressBase: i / draft.segments.length * 100, progressSpan: 100 / draft.segments.length, label: `第 ${i + 1}/${draft.segments.length} 段` });
+      if (detectCancelled) { seg.status = 'cancelled'; draft.phase = '已中断（可恢复）'; saveDraft(); renderDraft(); showResume(); return; }
+      seg.status = 'done';
+      seg.shotCount = draft.shots.filter(s => s.segment === seg.index).length;
+      draft.phase = `第 ${i + 1}/${draft.segments.length} 段完成`;
+      saveDraft(); renderDraft();
+    }
+    draft.phase = '分段切分完成'; saveDraft(); renderDraft();
+    setProgress(100, '分段切分完成 · 已自动保存：' + draft.savedAt);
+  } finally {
+    document.getElementById('startSegmented').disabled = false;
+    document.getElementById('startDetect').disabled = false;
+    document.getElementById('cancelImport').disabled = true;
+  }
+}
+
+/* opts：{ endSec（默认片尾）, segmentIndex（分段导入时为段号，否则 null）,
+   progressBase/progressSpan（把本段进度映射到总进度条的哪一段）,
+   label（进度文案前缀，如“第 2/6 段”） }。不传 opts 时行为与以前完全一致。 */
+async function detectShots(fromSec, opts){
+  opts = opts || {};
+  const endSec = (opts.endSec ?? (videoDuration || player.duration || 0));
+  const segIndex = (opts.segmentIndex === undefined ? null : opts.segmentIndex);
+  const base = opts.progressBase || 0, span = (opts.progressSpan === undefined ? 100 : opts.progressSpan);
+  const label = opts.label ? opts.label + ' · ' : '';
   detectCancelled = false; document.getElementById('cancelImport').disabled=false;
   const draft = ensureDraft(document.getElementById('importTitle').value || '未命名');
-  draft.phase='切分检测中'; const threshold = Number(document.getElementById('sensitivity').value);
+  draft.phase = label + '切分检测中'; const threshold = Number(document.getElementById('sensitivity').value);
   const canvas = document.createElement('canvas'); canvas.width=160; canvas.height=90; const ctx = canvas.getContext('2d');
-  const step = 0.5; let prev = null, cutTimes = [fromSec];
-  const total = videoDuration || player.duration || 0;
+  const step = 0.5; let prev = null, cutTimes = [fromSec], hitCap = false;
+  const total = endSec, spanLen = Math.max(0.001, total - fromSec);
   for(let t = fromSec; t < total; t += step){
     if(detectCancelled){ draft.phase='已中断（可恢复）'; saveDraft(); showResume(); return; }
     await seekTo(t); ctx.drawImage(player, 0, 0, 160, 90);
     const data = ctx.getImageData(0,0,160,90).data; let diff=0;
     if(prev){ for(let i=0;i<data.length;i+=40){ diff += Math.abs(data[i]-prev[i]); } diff = diff / (data.length/40); }
-    if(prev && diff > threshold && t - cutTimes[cutTimes.length-1] >= 0.6) cutTimes.push(t);
+    if(prev && diff > threshold && t - cutTimes[cutTimes.length-1] >= 0.6 && cutTimes.length < 300) cutTimes.push(t);
     prev = new Uint8ClampedArray(data);
-    if(Math.round(t*2)%4===0) setProgress(Math.round(t/total*70), `切分检测中 ${fmtTime(t)} / ${fmtTime(total)}`);
+    if(cutTimes.length >= 300){ hitCap = true; break; } /* 每段最多 300 个镜头，超了剩下的并进最后一个镜头 */
+    if(Math.round(t*2)%4===0) setProgress(Math.round(base + (t-fromSec)/spanLen*span*0.7), `${label}切分检测中 ${fmtTime(t)} / ${fmtTime(total)}`);
     await new Promise(r=>setTimeout(r,0));
   }
-  draft.phase='截取关键帧中';
+  draft.phase = label + '截取关键帧中';
   for(let i=0;i<cutTimes.length;i++){
     if(detectCancelled){ draft.phase='已中断（可恢复）'; saveDraft(); showResume(); return; }
     const start = cutTimes[i], end = (cutTimes[i+1] ?? total);
     await seekTo(Math.min(start+0.05, Math.max(start, end-0.05)));
     ctx.drawImage(player, 0, 0, 320, 180);
     const thumb = canvas.toDataURL('image/jpeg', 0.7);
-    draft.shots.push({id:uid(), title: draft.title || '未命名', start: fmtTime(start), duration: Math.round((end-start)*10)/10, thumb,
+    draft.shots.push({id:uid(), title: draft.title || '未命名', start: fmtTime(start), duration: Math.round((end-start)*10)/10, thumb, segment: segIndex,
       shotSize:'',camera:'',composition:'',movement:'',lighting:'',content:'',action:'',emotion:'',dialogue:'',music:'',sfx:'',transition:'',montage:'',why:'', sample:false});
-    setProgress(70 + Math.round((i+1)/cutTimes.length*30), `截取关键帧 ${i+1}/${cutTimes.length}`);
+    setProgress(Math.round(base + span*0.7 + (i+1)/cutTimes.length*span*0.3), `${label}截取关键帧 ${i+1}/${cutTimes.length}`);
     saveDraft(); renderDraft();
   }
-  draft.phase='切分完成'; saveDraft(); renderDraft(); setProgress(100, '切分完成 · 已自动保存：'+draft.savedAt);
+  draft.phase = label + '切分完成'; saveDraft(); renderDraft(); setProgress(Math.round(base + span), label + '切分完成' + (hitCap ? '（已达每段 300 个镜头上限）' : '') + ' · 已自动保存：'+draft.savedAt);
   document.getElementById('cancelImport').disabled=true;
 }
 function showResume(){ document.getElementById('resumeImport').style.display='inline-block'; document.getElementById('discardDraft').style.display='inline-block';
@@ -254,8 +339,10 @@ function renderDraft(){
   document.getElementById('draftCount').textContent = d ? `共 ${d.shots.length} 个镜头 · ${d.phase||''}` : '暂无草稿';
   document.getElementById('importTitle').value = d ? d.title : '';
   if(d && d.phase && d.phase.includes('中断')) showResume();
+  updateSegmentUI();
   if(!d || !d.shots.length){ document.getElementById('draftList').innerHTML = '<p class="muted">还没有切分好的镜头草稿。</p>'; return; }
-  document.getElementById('draftList').innerHTML = d.shots.map((s,i)=>`<article class="shot" data-draft-row="${s.id}">
+  /* 草稿行的编号 i 是整份草稿里的全局序号（顺序预填按它找邻居），分段只分组显示，不重编号 */
+  const shotRow = (s,i)=>`<article class="shot" data-draft-row="${s.id}">
     <div class="shot-head">
       ${s.thumb?`<img class="thumb" src="${s.thumb}" alt="关键帧" data-num="${i+1}" data-start="${esc(s.start)}" data-duration="${esc(s.duration)}" tabindex="0">`:''}
       <div style="flex:1"><strong>#${i+1} 开始 ${esc(s.start)}</strong> <span class="kbd">时长 ${esc(s.duration)} 秒</span>
@@ -264,7 +351,25 @@ function renderDraft(){
       <div class="row"><input type="checkbox" data-check="${s.id}" ${s.checked!==false?'checked':''} style="width:20px;height:20px"><button data-heuristic="${s.id}" ${aiBusy.has('h:'+s.id)?'disabled':''}>${aiBusy.has('h:'+s.id)?'分析中…':'识图预填'}</button><button data-sequence="${s.id}" ${aiBusy.has('s:'+s.id)?'disabled':''}>${aiBusy.has('s:'+s.id)?'预填中…':'顺序预填'}</button><button data-del-draft="${s.id}">删除此镜</button></div>
     </div>
     <div class="grid">${FIELDS.map(f=>draftField(s,f)).join('')}</div>
-  </article>`).join('');
+  </article>`;
+  /* 分段导入的草稿按段分组显示，每段可单独存入拉片库；单次导入保持原来的平铺列表 */
+  if (d.segmented && Array.isArray(d.segments) && d.segments.length) {
+    const SEG_STATUS = { pending: '待处理', processing: '处理中…', done: '已完成', saved: '已存入拉片库', cancelled: '已中断' };
+    document.getElementById('draftList').innerHTML = d.segments.map(seg => {
+      const list = d.shots.map((s,i)=>({s,i})).filter(x => (x.s.segment ?? 0) === seg.index);
+      const saved = seg.status === 'saved';
+      return `<div class="seg-group">
+        <div class="seg-head"><strong>第 ${seg.index+1} 段 ${fmtTime(seg.start)}–${fmtTime(seg.end)}</strong>
+        <span class="muted">共 ${list.length} 个镜头 · ${SEG_STATUS[seg.status] || seg.status}</span>
+        <span style="flex:1"></span>
+        ${list.length && !saved ? `<button data-save-segment="${seg.index}">存入拉片库（本段）</button>` : ''}
+        </div>
+        ${list.length ? list.map(x => shotRow(x.s, x.i)).join('') : '<p class="muted">本段还没有镜头。</p>'}
+      </div>`;
+    }).join('');
+    return;
+  }
+  document.getElementById('draftList').innerHTML = d.shots.map(shotRow).join('');
 }
 document.getElementById('draftList').addEventListener('input', e => {
   const el = e.target.closest('[data-draft]'); if(!el) return;
@@ -275,6 +380,8 @@ document.getElementById('draftList').addEventListener('change', e => {
   const d = db.draft.shots.find(x=>x.id===c.dataset.check); if(d){ d.checked=c.checked; saveDraft(); }
 });
 document.getElementById('draftList').addEventListener('click', e => {
+  const sv = e.target.closest('[data-save-segment]');
+  if(sv){ saveSegmentShots(Number(sv.dataset.saveSegment)); return; }
   const del = e.target.closest('[data-del-draft]');
   if(del){ db.draft.shots = db.draft.shots.filter(s=>s.id!==del.dataset.delDraft); saveDraft(); renderDraft(); return; }
   const h = e.target.closest('[data-heuristic]'); if(h){ aiPrefill(h.dataset.heuristic); return; }
@@ -287,6 +394,24 @@ document.getElementById('batchSave').addEventListener('click', async () => {
   db.draft = null; try{localStorage.removeItem(DRAFT_LS);}catch(e){} renderDraft(); await refreshData(); renderShots();
   alert(`已存入拉片库 ${chosen.length} 个镜头，草稿已清除。`);
 });
+
+/* ---- 按段存入拉片库：只保存该段打勾的镜头，从草稿中移除，其它段不受影响 ----
+   全部段都存完、草稿空了时，整个草稿清除（与一键批量保存一致）。 */
+async function saveSegmentShots(segIndex){
+  const d = db.draft; if(!d) return;
+  const seg = Array.isArray(d.segments) ? d.segments.find(s => s.index === segIndex) : null;
+  const chosen = d.shots.filter(s => (s.segment ?? 0) === segIndex && s.checked !== false)
+    .map(s => { const {checked, aiFilled, subtitleSource, segment, ...rest} = s; return {...rest, sample:false}; });
+  if(!chosen.length) return alert('本段没有可保存的镜头（可能都未勾选）。');
+  if(!confirm(`把第 ${segIndex + 1} 段的 ${chosen.length} 个镜头存入拉片库吗？本段镜头将从草稿中移除，其他段不受影响。`)) return;
+  await api('/api/shots/batch', { method: 'POST', body: JSON.stringify({ shots: chosen }) });
+  d.shots = d.shots.filter(s => !((s.segment ?? 0) === segIndex && s.checked !== false));
+  if (seg) { seg.status = 'saved'; seg.shotCount = d.shots.filter(s => (s.segment ?? 0) === segIndex).length; }
+  if (!d.shots.length) { db.draft = null; try{localStorage.removeItem(DRAFT_LS);}catch(e){} }
+  else saveDraft();
+  renderDraft(); await refreshData(); renderShots();
+  alert(`第 ${segIndex + 1} 段已存入拉片库 ${chosen.length} 个镜头。`);
+}
 
 /* ---- AI 预填加载态：renderDraft 会整体重渲染草稿列表，所以按钮的
    “分析中 / 预填中”状态不能只改 DOM，必须记在这个集合里，渲染时查它 ---- */
@@ -504,8 +629,9 @@ const HELP = {
       <li>切分按画面变化检测（每 0.5 秒采样一次），每个镜头自动截取一张关键帧，时间码和时长自动填好，分析字段留空等你确认。</li>
       <li>在草稿里逐条填写，或用下面的 AI 预填帮忙，再点「一键批量存入拉片库」（只保存打勾的镜头，保存后草稿自动清除）。</li>
     </ul>
-    <h4>长视频注意</h4>
-    <p>超过 10 分钟的视频会提示：建议先截取 5–10 分钟的关键段落再导入，整集一次导入会很慢。</p>
+    <h4>长视频：分段导入</h4>
+    <p>60 分钟这样的长片可以直接用「分段导入」：选好每段时长（默认 10 分钟），系统会算出要切成几段（60 分钟就是 6 段），然后一段一段顺序处理，不会同时跑。每段最多 300 个镜头，时间码按原片绝对时间算，不会从 0:00 重算。</p>
+    <p>处理中会显示“正在处理第 2/6 段”和总进度；随时可以点「取消」，已完成的分段会保留下来。刷新页面后，重新选同一个视频文件再点「继续导入 / 恢复」，会从下一段没处理完的接着跑。草稿里每段自成一组，标着“第 1 段 00:00–10:00”，可以按段点「存入拉片库（本段）」，也可以最后点「一键批量存入拉片库」全部一起存。超过 10 分钟的视频若不分段，仍会提示先截取 5–10 分钟的关键段落再导入。</p>
     <h4>字幕来源（按优先级）</h4>
     <ul>
       <li><b>SRT 字幕文件（最准）</b>：切分完成后再传 .srt 文件，按时间码自动对齐到每个镜头的「对白」栏。</li>

@@ -123,7 +123,22 @@
         <input id="videoUrl" placeholder="或粘贴可直接下载的视频文件链接（mp4/webm）" style="flex:2;min-width:220px">
         <button id="loadUrl">加载链接</button>
       </div>
-      <div id="longWarn" class="warn" style="display:none;margin-top:10px">视频超过 10 分钟，建议先截取 5–10 分钟的关键段落再导入，整集一次导入会很慢。</div>
+      <div id="longWarn" class="warn" style="display:none;margin-top:10px">视频超过 10 分钟：建议用下面的「分段导入」按段处理，也可以先截取 5–10 分钟的关键段落再导入。</div>
+      <div id="segmentPanel" class="card" style="display:none;margin-top:10px;background:#f9fafb">
+        <h3 style="margin-top:0">分段导入</h3>
+        <p class="muted" id="segmentInfo"></p>
+        <div class="row">
+          <label style="display:inline;margin:0">每段时长
+            <select id="segmentDuration" style="width:130px;display:inline-block">
+              <option value="300">5 分钟</option>
+              <option value="600" selected>10 分钟</option>
+              <option value="900">15 分钟</option>
+            </select>
+          </label>
+          <button class="primary" id="startSegmented">分段导入</button>
+          <span class="muted">一段一段顺序处理；每段最多 300 个镜头；时间码按原片绝对时间算。</span>
+        </div>
+      </div>
       <div style="margin-top:10px"><progress id="importProgress" value="0" max="100"></progress><div class="muted" id="importProgressText">未开始 · 已自动保存：—</div></div>
       <div class="row" style="margin-top:10px">
         <button class="primary" id="startDetect" disabled>开始切分镜头</button>
