@@ -333,7 +333,7 @@ function showResume(){ document.getElementById('resumeImport').style.display='in
 function seekTo(t){ return new Promise(res => { player.onseeked = () => res(); player.currentTime = Math.min(t, (player.duration||t)-0.01); setTimeout(res, 800); }); }
 
 /* ---- drafts ---- */
-function draftField(d, f){ return `<label>${FIELD_LABEL[f]}</label><input data-draft="${d.id}" data-field="${f}" value="${esc(d[f]||'')}" placeholder="待填写">`; }
+function draftField(d, f){ return `<div class="field"><label>${FIELD_LABEL[f]}</label><input data-draft="${d.id}" data-field="${f}" value="${esc(d[f]||'')}" placeholder="待填写"></div>`; }
 function renderDraft(){
   const d = db.draft;
   document.getElementById('draftCount').textContent = d ? `共 ${d.shots.length} 个镜头 · ${d.phase||''}` : '暂无草稿';
@@ -351,7 +351,7 @@ function renderDraft(){
       <span class="kbd">点「识图预填」补画面类字段；点「顺序预填」补转场/蒙太奇/为什么。</span></div>
       <div class="row"><input type="checkbox" data-check="${s.id}" ${s.checked!==false?'checked':''} style="width:20px;height:20px"><button data-heuristic="${s.id}" ${aiBusy.has('h:'+s.id)?'disabled':''}>${aiBusy.has('h:'+s.id)?'分析中…':'识图预填'}</button><button data-sequence="${s.id}" ${aiBusy.has('s:'+s.id)?'disabled':''}>${aiBusy.has('s:'+s.id)?'预填中…':'顺序预填'}</button><button data-del-draft="${s.id}">删除此镜</button></div>
     </div>
-    <div class="grid">${FIELDS.map(f=>draftField(s,f)).join('')}</div>
+    <div class="shot-fields">${FIELDS.map(f=>draftField(s,f)).join('')}</div>
   </article>`;
   /* 分段导入的草稿按段分组显示，每段可单独存入拉片库；单次导入保持原来的平铺列表 */
   if (d.segmented && Array.isArray(d.segments) && d.segments.length) {
