@@ -429,9 +429,8 @@ function renderDraft(){
     <div class="shot-head">
       ${s.thumb?`<img class="thumb" src="${s.thumb}" alt="关键帧" data-num="${i+1}" data-start="${esc(s.start)}" data-duration="${esc(s.duration)}" tabindex="0">`:''}
       <div style="flex:1"><strong>#${i+1} 开始 ${esc(s.start)}</strong> <span class="kbd">时长 ${esc(s.duration)} 秒</span>
-      ${s.aiFilled?' <span class="badge ai">AI预填</span>':''}${s.subtitleSource?` <span class="badge">字幕来源：${esc(s.subtitleSource)}</span>`:''}<br>
-      <span class="kbd">点「识图预填」补画面类字段；点「顺序预填」补转场/蒙太奇/为什么。对白不在识图预填里：请在上方「字幕来源」点「识别画面字幕（OCR）」或传 SRT 文件。</span></div>
-      <div class="row"><input type="checkbox" data-check="${s.id}" ${s.checked!==false?'checked':''} style="width:20px;height:20px"><button data-heuristic="${s.id}" ${aiBusy.has('h:'+s.id)?'disabled':''}>${aiBusy.has('h:'+s.id)?'分析中…':'识图预填'}</button><button data-sequence="${s.id}" ${aiBusy.has('s:'+s.id)?'disabled':''}>${aiBusy.has('s:'+s.id)?'预填中…':'顺序预填'}</button><button data-recapture="${s.id}">重截关键帧</button><button data-extract-draft="${s.id}">存知识库</button><button data-del-draft="${s.id}">删除此镜</button></div>
+      ${s.aiFilled?' <span class="badge ai">AI预填</span>':''}${s.subtitleSource?` <span class="badge">字幕来源：${esc(s.subtitleSource)}</span>`:''}</div>
+      <div class="row"><input type="checkbox" data-check="${s.id}" ${s.checked!==false?'checked':''} style="width:20px;height:20px"><button data-heuristic="${s.id}" title="看关键帧图片，只补能“看出来”的画面类字段：景别、机位、构图、光线、画面内容、人物动作、情绪。" ${aiBusy.has('h:'+s.id)?'disabled':''}>${aiBusy.has('h:'+s.id)?'分析中…':'识图预填'}</button><button data-sequence="${s.id}" title="看当前镜头和前后镜头、结合对白，推测转场方式、蒙太奇运用和“为什么这样用”（标“推测”，请核对）。" ${aiBusy.has('s:'+s.id)?'disabled':''}>${aiBusy.has('s:'+s.id)?'预填中…':'顺序预填'}</button><button data-recapture="${s.id}">重截关键帧</button><button data-extract-draft="${s.id}">存知识库</button><button data-del-draft="${s.id}">删除此镜</button></div>
     </div>
     <div class="shot-fields">${FIELDS.map(f=>draftField(s,f)).join('')}</div>
   </article>`;
