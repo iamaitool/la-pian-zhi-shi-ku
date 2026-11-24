@@ -232,6 +232,9 @@ function renderKnowledge(){
   const em = document.getElementById('knowFilterEmotion').value;
   const list = db.knowledge.filter(k => (!em || k.emotion===em) && (!q || [k.title,k.desc,(k.tags||[]).join(' ')].join(' ').toLowerCase().includes(q)));
   document.getElementById('knowCount').textContent = `共 ${db.knowledge.length} 条`;
+  /* 知识库为空时禁用导出按钮，避免下载空文件 */
+  document.getElementById('knowExportTxt').disabled = !db.knowledge.length;
+  document.getElementById('knowExportMd').disabled = !db.knowledge.length;
   document.getElementById('knowList').innerHTML = list.length ? list.map(k=>`<article class="shot">
     <strong>${esc(k.title)}</strong>${k.sample?' <span class="badge">示例</span>':''}<br>
     <span class="kbd">情绪 ${esc(k.emotion)} · 场景 ${esc(k.scene||'—')} · 节奏 ${esc(k.rhythm)}</span><br>
@@ -242,6 +245,25 @@ function renderKnowledge(){
 }
 document.getElementById('knowSearch').addEventListener('input', renderKnowledge);
 document.getElementById('knowFilterEmotion').addEventListener('change', renderKnowledge);
+
+/* ---- knowledge export：一键导出全部规律（不受搜索/筛选影响），本地下载，无需走服务端 ---- */
+function knowledgeExportName(ext){ const d=new Date(); const p=n=>String(n).padStart(2,'0'); return `视听语言知识库-${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}.${ext}`; }
+function downloadTextFile(filename, text, type){ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([text],{type})); a.download=filename; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 1000); }
+function knowledgeMetaLine(k){ const parts=[]; if(k.emotion) parts.push('情绪：'+k.emotion); if(k.scene) parts.push('场景：'+k.scene); if(k.rhythm) parts.push('节奏：'+k.rhythm); return parts.join(' · '); }
+function knowledgeToTxt(){
+  const date=new Date().toISOString().slice(0,10);
+  return `视听语言知识库（共 ${db.knowledge.length} 条，导出于 ${date}）\n\n` + db.knowledge.map(k=>
+    ['【'+k.title+'】', knowledgeMetaLine(k), (k.tags||[]).length ? '标签：'+k.tags.join('、') : '', k.desc||''].filter(Boolean).join('\n')
+  ).join('\n\n----------------\n\n');
+}
+function knowledgeToMd(){
+  const date=new Date().toISOString().slice(0,10);
+  return `# 视听语言知识库\n\n共 ${db.knowledge.length} 条，导出于 ${date}\n\n` + db.knowledge.map(k=>
+    ['## '+k.title, knowledgeMetaLine(k), (k.tags||[]).length ? '标签：'+k.tags.map(t=>'`'+t+'`').join(' ') : '', k.desc||''].filter(Boolean).join('\n\n')
+  ).join('\n\n---\n\n');
+}
+document.getElementById('knowExportTxt').addEventListener('click', () => { if(!db.knowledge.length) return alert('知识库是空的，没有可导出的规律。'); downloadTextFile(knowledgeExportName('txt'), knowledgeToTxt(), 'text/plain;charset=utf-8'); });
+document.getElementById('knowExportMd').addEventListener('click', () => { if(!db.knowledge.length) return alert('知识库是空的，没有可导出的规律。'); downloadTextFile(knowledgeExportName('md'), knowledgeToMd(), 'text/markdown;charset=utf-8'); });
 document.getElementById('knowForm').addEventListener('submit', async e => {
   e.preventDefault(); const id=document.getElementById('k-id').value;
   const rec={title:v('k-title'),emotion:v('k-emotion'),scene:v('k-scene'),rhythm:v('k-rhythm'),tags:v('k-tags').split(/[,，]/).map(s=>s.trim()).filter(Boolean),desc:v('k-desc'),sample:false};
@@ -1013,7 +1035,9 @@ const HELP = {
       <li>直接在本页「新增规律」表单里手动添加。</li>
     </ul>
     <h4>搜索和筛选</h4>
-    <p>顶部搜索框可按规律标题、用法说明、标签搜索；情绪下拉框可只看某一情绪的规律。每条规律都可编辑和删除，示例规律带“示例”标记。</p>` },
+    <p>顶部搜索框可按规律标题、用法说明、标签搜索；情绪下拉框可只看某一情绪的规律。每条规律都可编辑和删除，示例规律带“示例”标记。</p>
+    <h4>导出</h4>
+    <p>「一键导出 TXT」「一键导出 MD」会把知识库里的全部规律（不受搜索和筛选影响）下载成本地文档；知识库为空时按钮不可点。</p>` },
   storyboard: { title: '剧本转分镜 — 使用帮助', body: `
     <h4>这个页面是做什么的</h4>
     <p>把一段剧本变成一张分镜表：每个剧本节拍对应一个镜头，给出景别、引用了哪条知识库规律，以及可直接用的中文和英文 AI 视频提示词。</p>
