@@ -430,7 +430,7 @@ function renderDraft(){
       ${s.thumb?`<img class="thumb" src="${s.thumb}" alt="关键帧" data-num="${i+1}" data-start="${esc(s.start)}" data-duration="${esc(s.duration)}" tabindex="0">`:''}
       <div style="flex:1"><strong>#${i+1} 开始 ${esc(s.start)}</strong> <span class="kbd">时长 ${esc(s.duration)} 秒</span>
       ${s.aiFilled?' <span class="badge ai">AI预填</span>':''}${s.subtitleSource?` <span class="badge">字幕来源：${esc(s.subtitleSource)}</span>`:''}<br>
-      <span class="kbd">点「识图预填」补画面类字段；点「顺序预填」补转场/蒙太奇/为什么。</span></div>
+      <span class="kbd">点「识图预填」补画面类字段；点「顺序预填」补转场/蒙太奇/为什么。对白不在识图预填里：请在上方「字幕来源」点「识别画面字幕（OCR）」或传 SRT 文件。</span></div>
       <div class="row"><input type="checkbox" data-check="${s.id}" ${s.checked!==false?'checked':''} style="width:20px;height:20px"><button data-heuristic="${s.id}" ${aiBusy.has('h:'+s.id)?'disabled':''}>${aiBusy.has('h:'+s.id)?'分析中…':'识图预填'}</button><button data-sequence="${s.id}" ${aiBusy.has('s:'+s.id)?'disabled':''}>${aiBusy.has('s:'+s.id)?'预填中…':'顺序预填'}</button><button data-recapture="${s.id}">重截关键帧</button><button data-del-draft="${s.id}">删除此镜</button></div>
     </div>
     <div class="shot-fields">${FIELDS.map(f=>draftField(s,f)).join('')}</div>
@@ -714,22 +714,57 @@ document.getElementById('srtFile').addEventListener('change', e => {
     saveDraft(); renderDraft();
   }; r.readAsText(f);
 });
+/* ---- 画面字幕 OCR：只认关键帧底部约三分之一的字幕带 ----
+   字幕通常在画面底部，整帧识别容易把画面里的大标题也当成对白；
+   裁出底部字幕带（并放大 2 倍）再识别。裁切失败时回退到整帧识别。 */
+function cropSubtitleBand(dataUrl){
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => {
+      const h = Math.max(1, Math.round(img.height * 0.35));
+      const c = document.createElement('canvas');
+      c.width = img.width * 2; c.height = h * 2;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(img, 0, img.height - h, img.width, h, 0, 0, c.width, c.height);
+      res(c.toDataURL('image/png'));
+    };
+    img.onerror = () => rej(new Error('关键帧图片加载失败'));
+    img.src = dataUrl;
+  });
+}
 document.getElementById('ocrBtn').addEventListener('click', async () => {
   if(!db.draft || !db.draft.shots.length) return alert('请先导入并切分视频。');
   const note = document.getElementById('ocrNote');
+  const status = document.getElementById('subtitleStatus');
   note.textContent = '正在加载 Tesseract.js（需联网）…';
   try{
     if(!window.Tesseract){ await new Promise((res,rej)=>{ const sc=document.createElement('script'); sc.src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'; sc.onload=res; sc.onerror=()=>rej(new Error('CDN 加载失败')); document.head.appendChild(sc); }); }
-    let done=0;
-    for(const s of db.draft.shots.slice(0,10)){
-      const worker = await Tesseract.createWorker('chi_sim+eng');
-      const {data} = await worker.recognize(s.thumb);
-      await worker.terminate();
-      const text = (data.text||'').replace(/\s+/g,' ').trim();
-      if(text){ s.dialogue=text; s.subtitleSource='画面OCR（置信度 '+(Math.round((data.confidence||0)))+'，可能有错字，请核对）'; }
-      done++; document.getElementById('subtitleStatus').textContent = `画面 OCR 进行中 ${done}/10`;
+    /* 只处理还没对白的镜头（已有对白的不重复识别）；以前只认前 10 个，
+       232 个镜头的草稿里第 11 个之后永远拿不到对白。 */
+    const targets = db.draft.shots.filter(s => !(s.dialogue||'').trim());
+    if(!targets.length){ status.textContent = '所有镜头都已有对白，无需识别。'; note.textContent=''; return; }
+    const worker = await Tesseract.createWorker('chi_sim+eng');
+    let done=0, got=0;
+    try{
+      for(const s of targets){
+        let img = s.thumb;
+        try{ img = await cropSubtitleBand(s.thumb); }catch(_){ /* 裁切失败就用整帧识别 */ }
+        const {data} = await worker.recognize(img);
+        const text = (data.text||'').replace(/\s+/g,' ').trim();
+        if(text){ s.dialogue=text; s.subtitleSource='画面OCR（置信度 '+(Math.round((data.confidence||0)))+'，可能有错字，请核对）'; got++; }
+        done++; status.textContent = `画面 OCR 进行中 ${done}/${targets.length}`;
+        saveDraft(); renderDraft();
+      }
+    } finally { await worker.terminate(); }
+    /* 如实汇报识别结果：以前不管认到几个都只说“完成”，一个没认到也看不出来 */
+    if(got){
+      status.textContent = `画面 OCR 完成：${targets.length} 个镜头中 ${got} 个识别到字幕` +
+        (targets.length - got ? `，${targets.length - got} 个未识别到（可能无字幕或识别失败，请手动填写）` : '') + '（请逐条核对错字）';
+      note.textContent = '';
+    } else {
+      status.textContent = '画面 OCR 完成，但一个字幕都没识别到';
+      note.textContent = '画面 OCR 一个字幕都没识别到（可能画面无字幕，或字幕太小识别失败）。请改用 SRT 字幕文件，或直接在草稿的“对白”栏手动填写。';
     }
-    document.getElementById('subtitleStatus').textContent = '画面 OCR 完成（请逐条核对错字）';
     saveDraft(); renderDraft();
   }catch(err){ note.textContent = '画面 OCR 无法使用（'+err.message+'）。请改用 SRT 字幕文件，或直接在草稿的“对白”栏手动填写。'; }
 });
@@ -834,7 +869,7 @@ const HELP = {
     <h4>字幕来源（按优先级）</h4>
     <ul>
       <li><b>SRT 字幕文件（最准）</b>：切分完成后再传 .srt 文件，按时间码自动对齐到每个镜头的「对白」栏。</li>
-      <li><b>画面字幕 OCR</b>：没有 SRT 时点「识别画面字幕」，用 Tesseract.js 识别关键帧下方的字幕（需联网加载，识别前 10 个镜头）。识别结果可能有错字，旁边会标出置信度，请逐条核对。</li>
+      <li><b>画面字幕 OCR</b>：没有 SRT 时点「识别画面字幕」，用 Tesseract.js 识别关键帧下方（底部约三分之一）的字幕（需联网加载，只识别还没对白的镜头）。识别结果可能有错字，旁边会标出置信度，请逐条核对；一个都没识别到时会明确提示。</li>
       <li>内嵌字幕轨浏览器一般读不到，会如实提示；这时请用 SRT 文件或手动填写对白。</li>
     </ul>
     <h4>识图预填和顺序预填</h4>
