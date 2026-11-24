@@ -340,6 +340,7 @@ function renderDraft(){
   document.getElementById('importTitle').value = d ? d.title : '';
   if(d && d.phase && d.phase.includes('中断')) showResume();
   updateSegmentUI();
+  updateScrubber();
   if(!d || !d.shots.length){ document.getElementById('draftList').innerHTML = '<p class="muted">还没有切分好的镜头草稿。</p>'; return; }
   /* 草稿行的编号 i 是整份草稿里的全局序号（顺序预填按它找邻居），分段只分组显示，不重编号 */
   const shotRow = (s,i)=>`<article class="shot" data-draft-row="${s.id}">
@@ -386,7 +387,65 @@ document.getElementById('draftList').addEventListener('click', e => {
   if(del){ db.draft.shots = db.draft.shots.filter(s=>s.id!==del.dataset.delDraft); saveDraft(); renderDraft(); return; }
   const h = e.target.closest('[data-heuristic]'); if(h){ aiPrefill(h.dataset.heuristic); return; }
   const sq = e.target.closest('[data-sequence]'); if(sq){ sequencePrefill(sq.dataset.sequence); return; }
+  /* 点某条镜头时，滑轨同步到该镜头编号（删除/预填按钮已在上面处理并返回） */
+  const row = e.target.closest('article.shot');
+  if(row){ const i = scrubRows().indexOf(row); if(i >= 0){ scrubValue = i + 1; updateScrubber(); } }
 });
+
+/* ---- 镜头游标滑轨：拖动滑到第 N 个镜头，镜头表滚动到该镜头置顶并短暂高亮 ----
+   编号是整份草稿的全局序号（分段草稿也一样），拖到 10 就是全局第 10 个镜头。
+   renderDraft 会整体重渲染草稿列表，所以滑轨位置记在 scrubValue 变量里，渲染时恢复；
+   手动滚动/点镜头行会同步滑轨，但拖动时拖动优先（scrubDragging 为 true 时不同步）。 */
+let scrubDragging = false;
+let scrubValue = 1;
+let scrubFlashTimer = null;
+function scrubRows(){ return Array.from(document.querySelectorAll('#draftList article.shot')); }
+function updateScrubber(){
+  const box = document.getElementById('shotScrubber');
+  const range = document.getElementById('shotScrubberRange');
+  const n = db.draft ? db.draft.shots.length : 0;
+  if(!n){ box.style.display = 'none'; return; }
+  box.style.display = 'flex';
+  scrubValue = Math.min(Math.max(scrubValue || 1, 1), n);
+  range.max = n;
+  range.value = scrubValue;
+  document.getElementById('scrubLabel').textContent = `第 ${scrubValue} / 共 ${n} 个镜头`;
+}
+function scrollToShot(n, smooth){
+  const row = scrubRows()[n - 1]; if(!row) return;
+  const navH = (document.querySelector('nav') || {}).offsetHeight || 0;
+  window.scrollTo({ top: row.getBoundingClientRect().top + window.scrollY - navH - 8, behavior: smooth ? 'smooth' : 'auto' });
+  row.classList.add('scrub-target');
+  clearTimeout(scrubFlashTimer);
+  scrubFlashTimer = setTimeout(() => row.classList.remove('scrub-target'), 1600);
+}
+document.getElementById('shotScrubberRange').addEventListener('input', () => {
+  scrubDragging = true;
+  scrubValue = Number(document.getElementById('shotScrubberRange').value);
+  document.getElementById('scrubLabel').textContent = `第 ${scrubValue} / 共 ${db.draft ? db.draft.shots.length : 0} 个镜头`;
+  scrollToShot(scrubValue, false);
+});
+document.getElementById('shotScrubberRange').addEventListener('change', () => {
+  scrubDragging = false;
+  scrollToShot(scrubValue, true);
+});
+/* 手动滚动列表时同步滑轨到当前置顶的镜头（拖动时不同步，拖动优先） */
+let scrubScrollTick = false;
+window.addEventListener('scroll', () => {
+  if(scrubDragging || scrubScrollTick) return;
+  if(!document.getElementById('page-import').classList.contains('active')) return;
+  if(!db.draft || !db.draft.shots.length) return;
+  scrubScrollTick = true;
+  requestAnimationFrame(() => {
+    scrubScrollTick = false;
+    if(scrubDragging || !db.draft || !db.draft.shots.length) return;
+    const navH = (document.querySelector('nav') || {}).offsetHeight || 0;
+    const rows = scrubRows();
+    let idx = rows.findIndex(r => r.getBoundingClientRect().bottom > navH + 8);
+    if(idx < 0) idx = rows.length - 1;
+    if(idx >= 0 && idx + 1 !== scrubValue){ scrubValue = idx + 1; updateScrubber(); }
+  });
+}, { passive: true });
 document.getElementById('batchSave').addEventListener('click', async () => {
   if(!db.draft || !db.draft.shots.length) return alert('没有可保存的草稿。');
   const chosen = db.draft.shots.filter(s=>s.checked!==false).map(s=>{ const {checked, aiFilled, subtitleSource, ...rest} = s; return {...rest, sample:false}; });
@@ -647,7 +706,7 @@ const HELP = {
     <h4>草稿断点恢复</h4>
     <p>导入草稿会自动保存到浏览器本地缓存（localStorage），切页签、刷新后仍在；中途刷新或中断会显示「继续导入 / 恢复」，点它可从断点接着跑（若视频文件没保住，会提示你重新选择同一个视频文件）。不想要了点「放弃这次导入」。</p>
     <h4>小技巧</h4>
-    <p>鼠标停在关键帧上可看大图；草稿里每条前面的复选框可取消勾选，不想存入拉片库的镜头去掉勾即可。</p>` },
+    <p>鼠标停在关键帧上可看大图；草稿里每条前面的复选框可取消勾选，不想存入拉片库的镜头去掉勾即可。镜头多了可以用草稿上方的「快速定位镜头」滑轨：拖到第 N 个，镜头表就会滚动到第 N 个镜头置顶并高亮，方便快速定位。</p>` },
 };
 function openHelp(key){
   const h = HELP[key]; if(!h) return;
