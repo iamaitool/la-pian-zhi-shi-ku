@@ -21,7 +21,7 @@
 <main>
   <section id="page-shots" class="page active">
     <div class="card">
-      <h2>拉片库 <span class="muted" id="shotCount"></span></h2>
+      <h2>拉片库 <span class="muted" id="shotCount"></span> <button type="button" class="help-btn" data-help="shots" aria-label="拉片库帮助">?</button></h2>
       <div class="row">
         <input id="shotSearch" placeholder="搜索：片名 / 场景 / 对白 / 景别…" style="flex:1;min-width:220px">
         <select id="shotFilterEmotion" style="width:160px"><option value="">全部情绪</option><option>紧张</option><option>平静</option><option>悲伤</option><option>愤怒</option><option>喜悦</option><option>悬疑</option></select>
@@ -64,7 +64,7 @@
 
   <section id="page-knowledge" class="page">
     <div class="card">
-      <h2>视听语言知识库 <span class="muted" id="knowCount"></span></h2>
+      <h2>视听语言知识库 <span class="muted" id="knowCount"></span> <button type="button" class="help-btn" data-help="knowledge" aria-label="知识库帮助">?</button></h2>
       <div class="row">
         <input id="knowSearch" placeholder="搜索规律 / 标签…" style="flex:1;min-width:220px">
         <select id="knowFilterEmotion" style="width:160px"><option value="">全部情绪</option><option>紧张</option><option>平静</option><option>悲伤</option><option>愤怒</option><option>喜悦</option><option>悬疑</option></select>
@@ -90,7 +90,7 @@
 
   <section id="page-storyboard" class="page">
     <div class="card">
-      <h2>剧本转分镜</h2>
+      <h2>剧本转分镜 <button type="button" class="help-btn" data-help="storyboard" aria-label="剧本转分镜帮助">?</button></h2>
       <p class="muted">服务端 AI 按你的知识库生成分镜（优先匹配相同情绪，其次匹配场景类型）。若 AI 未配置，会明确提示，不会编造结果。</p>
       <div class="grid">
         <div><label>情绪</label><select id="sb-emotion"><option>紧张</option><option>平静</option><option>悲伤</option><option>愤怒</option><option>喜悦</option><option>悬疑</option></select></div>
@@ -111,7 +111,7 @@
 
   <section id="page-import" class="page">
     <div class="card">
-      <h2>视频导入</h2>
+      <h2>视频导入 <button type="button" class="help-btn" data-help="import" aria-label="视频导入帮助">?</button></h2>
       <p class="muted">视频全程在浏览器本地处理，不会上传到任何服务器。切分靠画面变化检测（逐帧像素差），分析字段需你确认。</p>
       <div id="importStatus" class="warn" style="display:none"></div>
       <div class="row">
@@ -157,6 +157,14 @@
     </div>
   </section>
 </main>
+
+<div id="helpModal" class="help-overlay" style="display:none" role="dialog" aria-modal="true">
+  <div class="help-dialog">
+    <button type="button" class="help-close" id="helpClose" aria-label="关闭帮助">✕</button>
+    <h3 id="helpTitle"></h3>
+    <div id="helpBody" class="help-body"></div>
+  </div>
+</div>
 
 <div id="hoverPreview"><img alt="关键帧大图"><div class="meta"></div></div>
 <script src="app.js"></script>
