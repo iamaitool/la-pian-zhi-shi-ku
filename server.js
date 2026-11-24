@@ -71,10 +71,12 @@ app.post('/api/ai/analyze-keyframe', asyncHandler(async (req, res) => {
   } catch (err) { aiErrorResponse(res, err); }
 }));
 
-/* ---- AI：顺序预填（转场 / 蒙太奇 / 为什么） ---- */
+/* ---- AI：顺序预填（转场 / 蒙太奇 / 为什么） ----
+   只接受小窗口摘要 + targetIndices（目标镜头编号），不接受整批镜头，
+   避免一次生成几十上百条结果导致超时。 */
 app.post('/api/ai/analyze-sequence', asyncHandler(async (req, res) => {
   try {
-    const out = await ai.analyzeSequence({ shots: req.body && req.body.shots });
+    const out = await ai.analyzeSequence({ shots: req.body && req.body.shots, targetIndices: req.body && req.body.targetIndices });
     res.json({ results: out });
   } catch (err) { aiErrorResponse(res, err); }
 }));

@@ -261,7 +261,7 @@ function renderDraft(){
       <div style="flex:1"><strong>#${i+1} 开始 ${esc(s.start)}</strong> <span class="kbd">时长 ${esc(s.duration)} 秒</span>
       ${s.aiFilled?' <span class="badge ai">AI预填</span>':''}${s.subtitleSource?` <span class="badge">字幕来源：${esc(s.subtitleSource)}</span>`:''}<br>
       <span class="kbd">点「识图预填」补画面类字段；点「顺序预填」补转场/蒙太奇/为什么。</span></div>
-      <div class="row"><input type="checkbox" data-check="${s.id}" ${s.checked!==false?'checked':''} style="width:20px;height:20px"><button data-heuristic="${s.id}">识图预填</button><button data-sequence="${s.id}">顺序预填</button><button data-del-draft="${s.id}">删除此镜</button></div>
+      <div class="row"><input type="checkbox" data-check="${s.id}" ${s.checked!==false?'checked':''} style="width:20px;height:20px"><button data-heuristic="${s.id}" ${aiBusy.has('h:'+s.id)?'disabled':''}>${aiBusy.has('h:'+s.id)?'分析中…':'识图预填'}</button><button data-sequence="${s.id}" ${aiBusy.has('s:'+s.id)?'disabled':''}>${aiBusy.has('s:'+s.id)?'预填中…':'顺序预填'}</button><button data-del-draft="${s.id}">删除此镜</button></div>
     </div>
     <div class="grid">${FIELDS.map(f=>draftField(s,f)).join('')}</div>
   </article>`).join('');
@@ -288,49 +288,87 @@ document.getElementById('batchSave').addEventListener('click', async () => {
   alert(`已存入拉片库 ${chosen.length} 个镜头，草稿已清除。`);
 });
 
+/* ---- AI 预填加载态：renderDraft 会整体重渲染草稿列表，所以按钮的
+   “分析中 / 预填中”状态不能只改 DOM，必须记在这个集合里，渲染时查它 ---- */
+const aiBusy = new Set(); /* 元素形如 'h:<镜头id>'（识图）或 's:<镜头id>'（顺序） */
+
+/* 顺序预填只发精简文本摘要：不含关键帧图片（thumb 是几十 KB 的 base64，
+   整批发过去既慢又可能撑爆请求体），index 用镜头在整批草稿里的原始编号。 */
+function seqSummaryShot(s, originalIndex){
+  return { index: originalIndex, start: s.start || '', duration: s.duration ?? '',
+    shotSize: s.shotSize || '', camera: s.camera || '', content: s.content || '',
+    action: s.action || '', emotion: s.emotion || '', dialogue: s.dialogue || '' };
+}
+
 /* ---- 识图预填：服务端 DeepSeek 视觉分析 ---- */
 async function aiPrefill(id){
   const d = db.draft && db.draft.shots.find(x=>x.id===id); if(!d || !d.thumb) return alert('该镜头没有关键帧。');
+  const key = 'h:' + id; if (aiBusy.has(key)) return; /* 已在跑，防重复点击 */
+  aiBusy.add(key); renderDraft();
   try {
     const out = await aiApi('/api/ai/analyze-keyframe', { imageDataUrl: d.thumb, shotContext: `${d.title || ''} 开始 ${d.start} 时长 ${d.duration} 秒` });
     ['shotSize','camera','composition','lighting','content','action','emotion'].forEach(f => { if (out[f]) d[f] = out[f]; });
-    d.aiFilled = true; saveDraft(); renderDraft();
+    d.aiFilled = true; saveDraft();
   } catch (err) { alert(String(err.message || err)); }
+  finally { aiBusy.delete(key); renderDraft(); }
 }
-document.getElementById('batchHeuristic').addEventListener('click', async () => {
+document.getElementById('batchHeuristic').addEventListener('click', async (e) => {
   if(!db.draft) return;
-  for(const s of db.draft.shots.filter(s=>!s.aiFilled).slice(0,10)){ await aiPrefill(s.id); }
+  const btn = e.currentTarget; btn.disabled = true; btn.textContent = '批量分析中…';
+  try {
+    for(const s of db.draft.shots.filter(s=>!s.aiFilled).slice(0,10)){ await aiPrefill(s.id); }
+  } finally { btn.disabled = false; btn.textContent = '批量识图前10个'; }
 });
 
-/* ---- 顺序预填：服务端 DeepSeek，看前后镜头 + 对白 ---- */
+/* ---- 顺序预填：服务端 DeepSeek，看前后镜头 + 对白 ----
+   只发目标镜头前后各 2 个邻居（最多 5 条精简摘要），一次只让模型返回
+   目标镜头 1 条结果；以前是把全部镜头一次发过去，模型要生成几十上百条
+   结果，30 秒内写不完就超时。 */
 async function sequencePrefill(id){
   const shots = db.draft ? db.draft.shots : []; const i = shots.findIndex(s=>s.id===id); if(i<0) return;
+  const key = 's:' + id; if (aiBusy.has(key)) return;
+  aiBusy.add(key); renderDraft();
   try {
-    const out = await aiApi('/api/ai/analyze-sequence', { shots });
+    const from = Math.max(0, i - 2), to = Math.min(shots.length, i + 3);
+    const window = shots.slice(from, to).map((s, k) => seqSummaryShot(s, from + k + 1));
+    const out = await aiApi('/api/ai/analyze-sequence', { shots: window, targetIndices: [i + 1] });
     const r = (out.results || []).find(x => x.index === i + 1);
     if (!r) return alert('顺序预填没有返回该镜头的结果。');
     const s = shots[i];
     if (r.transition) s.transition = r.transition;
     if (r.montage) s.montage = r.montage;
     if (r.why) s.why = r.why;
-    s.aiFilled = true; saveDraft(); renderDraft();
+    s.aiFilled = true; saveDraft();
   } catch (err) { alert(String(err.message || err)); }
+  finally { aiBusy.delete(key); renderDraft(); }
 }
-document.getElementById('batchSequence').addEventListener('click', async () => {
+document.getElementById('batchSequence').addEventListener('click', async (e) => {
   if(!db.draft) return;
+  const btn = e.currentTarget; btn.disabled = true; btn.textContent = '顺序预填中…';
   try {
-    const targets = db.draft.shots.slice(0,10);
-    const out = await aiApi('/api/ai/analyze-sequence', { shots: db.draft.shots });
-    (out.results || []).forEach(r => {
-      const s = db.draft.shots[r.index - 1];
-      if (!s || !targets.includes(s)) return;
-      if (r.transition) s.transition = r.transition;
-      if (r.montage) s.montage = r.montage;
-      if (r.why) s.why = r.why;
-      s.aiFilled = true;
-    });
-    saveDraft(); renderDraft();
+    /* 前 10 个镜头按 5 个一组分批调用，每组附带前后各 2 个邻居作上下文，
+       每组只返回该组 5 条结果，避免一次生成全部结果超时。 */
+    const targets = db.draft.shots.slice(0, 10);
+    for (let c = 0; c < targets.length; c += 5) {
+      const chunk = targets.slice(c, c + 5);
+      const chunkStart = db.draft.shots.indexOf(chunk[0]);
+      const chunkEnd = db.draft.shots.indexOf(chunk[chunk.length - 1]);
+      const from = Math.max(0, chunkStart - 2), to = Math.min(db.draft.shots.length, chunkEnd + 3);
+      const window = db.draft.shots.slice(from, to).map((s, k) => seqSummaryShot(s, from + k + 1));
+      const targetIndices = chunk.map(s => db.draft.shots.indexOf(s) + 1);
+      const out = await aiApi('/api/ai/analyze-sequence', { shots: window, targetIndices });
+      (out.results || []).forEach(r => {
+        const s = db.draft.shots[r.index - 1];
+        if (!s) return;
+        if (r.transition) s.transition = r.transition;
+        if (r.montage) s.montage = r.montage;
+        if (r.why) s.why = r.why;
+        s.aiFilled = true;
+      });
+    }
+    saveDraft();
   } catch (err) { alert(String(err.message || err)); }
+  finally { btn.disabled = false; btn.textContent = '顺序预填（前10个）'; renderDraft(); }
 });
 
 /* ---- 字幕：SRT 优先；画面 OCR 用 Tesseract.js（需联网，失败则手动） ---- */
