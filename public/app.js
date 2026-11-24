@@ -355,6 +355,21 @@ async function runSegmentedImport(){
 /* opts：{ endSec（默认片尾）, segmentIndex（分段导入时为段号，否则 null）,
    progressBase/progressSpan（把本段进度映射到总进度条的哪一段）,
    label（进度文案前缀，如“第 2/6 段”） }。不传 opts 时行为与以前完全一致。 */
+/* ---- 关键帧截取：按视频原始宽高比截整帧，绝不裁剪 ----
+   画布按原片比例定尺寸（最长边 320px），再把整帧 drawImage 到画布上；
+   之前画布固定 160x90 却按 320x180 画，画布只留下了左上 1/4（左半 + 上半画面），
+   缩略图就只剩部分画面。检测循环仍用自己的 160x90 小画布做像素差，不受影响。 */
+const thumbCanvas = document.createElement('canvas');
+function captureThumbFromPlayer(){
+  const vw = player.videoWidth || 0, vh = player.videoHeight || 0;
+  if(!vw || !vh) return null;
+  let w = 320, h = Math.round(320 * vh / vw);
+  if(h > 320){ h = 320; w = Math.max(1, Math.round(320 * vw / vh)); }
+  thumbCanvas.width = w; thumbCanvas.height = h;
+  const ctx = thumbCanvas.getContext('2d');
+  ctx.drawImage(player, 0, 0, w, h);
+  return thumbCanvas.toDataURL('image/jpeg', 0.7);
+}
 async function detectShots(fromSec, opts){
   opts = opts || {};
   const endSec = (opts.endSec ?? (videoDuration || player.duration || 0));
@@ -383,8 +398,7 @@ async function detectShots(fromSec, opts){
     if(detectCancelled){ draft.phase='已中断（可恢复）'; saveDraft(); showResume(); return; }
     const start = cutTimes[i], end = (cutTimes[i+1] ?? total);
     await seekTo(Math.min(start+0.05, Math.max(start, end-0.05)));
-    ctx.drawImage(player, 0, 0, 320, 180);
-    const thumb = canvas.toDataURL('image/jpeg', 0.7);
+    const thumb = captureThumbFromPlayer();
     draft.shots.push({id:uid(), title: draft.title || '未命名', start: fmtTime(start), duration: Math.round((end-start)*10)/10, thumb, segment: segIndex,
       shotSize:'',camera:'',composition:'',movement:'',lighting:'',content:'',action:'',emotion:'',dialogue:'',music:'',sfx:'',transition:'',montage:'',why:'', sample:false});
     setProgress(Math.round(base + span*0.7 + (i+1)/cutTimes.length*span*0.3), `${label}截取关键帧 ${i+1}/${cutTimes.length}`);
@@ -414,7 +428,7 @@ function renderDraft(){
       <div style="flex:1"><strong>#${i+1} 开始 ${esc(s.start)}</strong> <span class="kbd">时长 ${esc(s.duration)} 秒</span>
       ${s.aiFilled?' <span class="badge ai">AI预填</span>':''}${s.subtitleSource?` <span class="badge">字幕来源：${esc(s.subtitleSource)}</span>`:''}<br>
       <span class="kbd">点「识图预填」补画面类字段；点「顺序预填」补转场/蒙太奇/为什么。</span></div>
-      <div class="row"><input type="checkbox" data-check="${s.id}" ${s.checked!==false?'checked':''} style="width:20px;height:20px"><button data-heuristic="${s.id}" ${aiBusy.has('h:'+s.id)?'disabled':''}>${aiBusy.has('h:'+s.id)?'分析中…':'识图预填'}</button><button data-sequence="${s.id}" ${aiBusy.has('s:'+s.id)?'disabled':''}>${aiBusy.has('s:'+s.id)?'预填中…':'顺序预填'}</button><button data-del-draft="${s.id}">删除此镜</button></div>
+      <div class="row"><input type="checkbox" data-check="${s.id}" ${s.checked!==false?'checked':''} style="width:20px;height:20px"><button data-heuristic="${s.id}" ${aiBusy.has('h:'+s.id)?'disabled':''}>${aiBusy.has('h:'+s.id)?'分析中…':'识图预填'}</button><button data-sequence="${s.id}" ${aiBusy.has('s:'+s.id)?'disabled':''}>${aiBusy.has('s:'+s.id)?'预填中…':'顺序预填'}</button><button data-recapture="${s.id}">重截关键帧</button><button data-del-draft="${s.id}">删除此镜</button></div>
     </div>
     <div class="shot-fields">${FIELDS.map(f=>draftField(s,f)).join('')}</div>
   </article>`;
@@ -452,10 +466,28 @@ document.getElementById('draftList').addEventListener('click', e => {
   if(del){ db.draft.shots = db.draft.shots.filter(s=>s.id!==del.dataset.delDraft); saveDraft(); renderDraft(); return; }
   const h = e.target.closest('[data-heuristic]'); if(h){ aiPrefill(h.dataset.heuristic); return; }
   const sq = e.target.closest('[data-sequence]'); if(sq){ sequencePrefill(sq.dataset.sequence); return; }
+  const rc = e.target.closest('[data-recapture]'); if(rc){ recaptureThumb(rc.dataset.recapture); return; }
   /* 点某条镜头时，滑轨同步到该镜头编号（删除/预填按钮已在上面处理并返回），原视频预览也跳到该镜头 */
   const row = e.target.closest('article.shot');
   if(row){ const i = scrubRows().indexOf(row); if(i >= 0){ scrubValue = i + 1; updateScrubber(); previewSeekToShot(scrubValue); } }
 });
+
+/* ---- 重截关键帧：给已有草稿的某个镜头重新截一张整帧缩略图 ----
+   旧草稿里的缩略图是裁过的 data URL，修不回来；视频文件还在当前浏览器里时，
+   可跳到该镜头开始时间重截一张（按新逻辑截整帧），刷新后需先重选同一视频文件。 */
+async function recaptureThumb(id){
+  const s = db.draft && db.draft.shots.find(x => x.id === id); if(!s) return;
+  if(!currentVideoFile || !player.src) return alert('请先重新选择同一视频文件，再重截关键帧。');
+  if(!player.duration) return alert('视频还在加载，等一下再试。');
+  if(!document.getElementById('cancelImport').disabled) return alert('切分检测进行中，稍后再试。');
+  try {
+    player.pause();
+    await seekTo(Math.min(parseTime(s.start) + 0.05, Math.max(parseTime(s.start), player.duration - 0.01)));
+    const thumb = captureThumbFromPlayer();
+    if(!thumb) return alert('没取到视频画面，等一下再试。');
+    s.thumb = thumb; saveDraft(); renderDraft();
+  } catch(e){ alert('重截失败：' + (e.message || e)); }
+}
 
 /* ---- 镜头游标滑轨：拖动滑到第 N 个镜头，镜头表滚动到该镜头置顶并短暂高亮 ----
    编号是整份草稿的全局序号（分段草稿也一样），拖到 10 就是全局第 10 个镜头。
