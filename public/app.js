@@ -85,14 +85,16 @@ document.querySelectorAll('nav button').forEach(b => b.addEventListener('click',
 function shotCard(s, i){
   const ai = s.aiFilled ? ' <span class="badge ai">AI预填</span>' : '';
   const sample = s.sample ? ' <span class="badge">示例</span>' : '';
+  const extracted = isExtracted(s);
+  const extractedBadge = extracted ? ' <span class="badge extracted">已提炼</span>' : '';
   const rows = FIELDS.map(f=>`<tr><td style="width:90px">${FIELD_LABEL[f]}</td><td>${esc(s[f]||'待填写')}</td></tr>`).join('');
   return `<article class="shot" data-id="${s.id}">
     <div class="shot-head">
       ${s.thumb ? `<img class="thumb" src="${s.thumb}" alt="关键帧" data-num="${i+1}" data-start="${esc(s.start||'')}" data-duration="${esc(s.duration??'')}" tabindex="0">` : '<div class="thumb" style="display:flex;align-items:center;justify-content:center;color:#999">无关键帧</div>'}
-      <div style="flex:1"><strong>#${i+1} ${esc(s.title)}</strong>${sample}${ai}<br>
+      <div style="flex:1"><strong>#${i+1} ${esc(s.title)}</strong>${sample}${ai}${extractedBadge}<br>
       <span class="kbd">开始 ${esc(s.start||'')} · 时长 ${esc(s.duration??'')} 秒 · 情绪 ${esc(s.emotion||'')}</span><br>
       <span class="kbd">${esc(s.dialogue||'')}</span></div>
-      <div class="row"><button data-edit-shot="${s.id}">编辑</button><button data-del-shot="${s.id}">删除</button><button data-extract="${s.id}">提炼到知识库</button></div>
+      <div class="row"><button data-edit-shot="${s.id}">编辑</button><button data-del-shot="${s.id}">删除</button><button data-extract="${s.id}" ${extracted ? 'disabled' : ''}>${extracted ? '已提炼 ✓' : '提炼到知识库'}</button></div>
     </div>
     <table style="margin-top:10px">${rows}</table>
   </article>`;
@@ -132,6 +134,11 @@ async function shotToKnowledgeAI(s){
   } catch (_) {
     return { rec: base, ai: false }; /* AI 失败（超时/未配置/模型错误）时静默回退到模板 */
   }
+}
+/* 是否已提炼：知识库里已有按同一规则生成的标题（与批量存入 / 草稿存知识库的去重同一判断，
+   只读 db.shots / db.knowledge 实时推导，不改数据库结构；提炼成功后 refreshData + 重绘即可立即显示） */
+function isExtracted(s){
+  return db.knowledge.some(k => k.title === shotToKnowledge(s).title);
 }
 /* 当前拉片库列表（与 renderShots 同一套搜索 + 情绪筛选） */
 function filteredShots(){
@@ -200,15 +207,14 @@ document.getElementById('shotList').addEventListener('click', async e => {
     Object.entries(map).forEach(([k,el])=>document.getElementById(el).value=s[k]??''); window.scrollTo({top:0,behavior:'smooth'}); }
   if(ex){ const s=db.shots.find(x=>x.id===ex.dataset.extract); if(!s) return;
     const btn = ex; btn.disabled = true; btn.textContent = aiConfigured ? 'AI 生成中…' : '提炼中…';
-    const done = msg => { btn.textContent = msg; setTimeout(()=>{ btn.disabled = false; btn.textContent = '提炼到知识库'; }, 1800); };
+    const fail = () => { btn.textContent = '提炼失败'; setTimeout(()=>{ btn.disabled = false; btn.textContent = '提炼到知识库'; }, 1800); };
     try {
       const { rec } = await shotToKnowledgeAI(s); /* AI 失败时自动回退到本地模板 */
       await refreshData(); /* 拿最新知识库标题，已在库里的不重复存 */
-      if (db.knowledge.some(k => k.title === rec.title)) { done('已在库里 ✓'); return; }
+      if (db.knowledge.some(k => k.title === rec.title)) { renderShots(); return; } /* 已在库里：直接重绘显示 已提炼 徽标 */
       await api('/api/knowledge', { method: 'POST', body: JSON.stringify(rec) });
-      await refreshData(); renderKnowledge();
-      done('已提炼 ✓');
-    } catch (err) { done('提炼失败'); } }
+      await refreshData(); renderKnowledge(); renderShots(); /* 成功后立即重绘，显示 已提炼 徽标 */
+    } catch (err) { fail(); } }
 });
 
 /* ---- knowledge ---- */
