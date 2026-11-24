@@ -431,7 +431,7 @@ function renderDraft(){
       <div style="flex:1"><strong>#${i+1} 开始 ${esc(s.start)}</strong> <span class="kbd">时长 ${esc(s.duration)} 秒</span>
       ${s.aiFilled?' <span class="badge ai">AI预填</span>':''}${s.subtitleSource?` <span class="badge">字幕来源：${esc(s.subtitleSource)}</span>`:''}<br>
       <span class="kbd">点「识图预填」补画面类字段；点「顺序预填」补转场/蒙太奇/为什么。对白不在识图预填里：请在上方「字幕来源」点「识别画面字幕（OCR）」或传 SRT 文件。</span></div>
-      <div class="row"><input type="checkbox" data-check="${s.id}" ${s.checked!==false?'checked':''} style="width:20px;height:20px"><button data-heuristic="${s.id}" ${aiBusy.has('h:'+s.id)?'disabled':''}>${aiBusy.has('h:'+s.id)?'分析中…':'识图预填'}</button><button data-sequence="${s.id}" ${aiBusy.has('s:'+s.id)?'disabled':''}>${aiBusy.has('s:'+s.id)?'预填中…':'顺序预填'}</button><button data-recapture="${s.id}">重截关键帧</button><button data-del-draft="${s.id}">删除此镜</button></div>
+      <div class="row"><input type="checkbox" data-check="${s.id}" ${s.checked!==false?'checked':''} style="width:20px;height:20px"><button data-heuristic="${s.id}" ${aiBusy.has('h:'+s.id)?'disabled':''}>${aiBusy.has('h:'+s.id)?'分析中…':'识图预填'}</button><button data-sequence="${s.id}" ${aiBusy.has('s:'+s.id)?'disabled':''}>${aiBusy.has('s:'+s.id)?'预填中…':'顺序预填'}</button><button data-recapture="${s.id}">重截关键帧</button><button data-extract-draft="${s.id}">存知识库</button><button data-del-draft="${s.id}">删除此镜</button></div>
     </div>
     <div class="shot-fields">${FIELDS.map(f=>draftField(s,f)).join('')}</div>
   </article>`;
@@ -470,10 +470,30 @@ document.getElementById('draftList').addEventListener('click', e => {
   const h = e.target.closest('[data-heuristic]'); if(h){ aiPrefill(h.dataset.heuristic); return; }
   const sq = e.target.closest('[data-sequence]'); if(sq){ sequencePrefill(sq.dataset.sequence); return; }
   const rc = e.target.closest('[data-recapture]'); if(rc){ recaptureThumb(rc.dataset.recapture); return; }
+  const xd = e.target.closest('[data-extract-draft]'); if(xd){ extractDraftShot(xd.dataset.extractDraft, xd.closest('button')); return; }
   /* 点某条镜头时，滑轨同步到该镜头编号（删除/预填按钮已在上面处理并返回），原视频预览也跳到该镜头 */
   const row = e.target.closest('article.shot');
   if(row){ const i = scrubRows().indexOf(row); if(i >= 0){ scrubValue = i + 1; updateScrubber(); previewSeekToShot(scrubValue); } }
 });
+
+/* ---- 草稿单条存知识库：复用 shotToKnowledge（与拉片库单条提炼、批量存入同一生成逻辑），
+   按生成标题去重，已在库里的不重复存；草稿本身不动、不清除 ---- */
+async function extractDraftShot(id, btn){
+  const s = db.draft && db.draft.shots.find(x => x.id === id); if(!s) return;
+  const rec = shotToKnowledge(s);
+  if(btn){ btn.disabled = true; btn.textContent = '正在存入…'; }
+  try {
+    await refreshData(); /* 拿最新的知识库标题，避免重复存入 */
+    if (db.knowledge.some(k => k.title === rec.title)) { alert('这条已经在知识库里了，没有重复存入。'); return; }
+    await api('/api/knowledge', { method: 'POST', body: JSON.stringify(rec) });
+    await refreshData(); renderKnowledge();
+    alert('已存入知识库，可在知识库页查看和修改。');
+  } catch (err) {
+    alert('存入知识库失败：' + String(err.message || err));
+  } finally {
+    if(btn){ btn.disabled = false; btn.textContent = '存知识库'; }
+  }
+}
 
 /* ---- 重截关键帧：给已有草稿的某个镜头重新截一张整帧缩略图 ----
    旧草稿里的缩略图是裁过的 data URL，修不回来；视频文件还在当前浏览器里时，
@@ -898,7 +918,7 @@ const HELP = {
       <li>先填片名，再上传本地视频文件（或粘贴可直接下载的 mp4/webm 链接，点「加载链接」）。</li>
       <li>「切分灵敏度」默认 15：数值越大切得越碎、镜头越多；数值越小切得越少。调好后点「开始切分镜头」。</li>
       <li>切分按画面变化检测（每 0.5 秒采样一次），每个镜头自动截取一张关键帧，时间码和时长自动填好，分析字段留空等你确认。</li>
-      <li>在草稿里逐条填写，或用下面的 AI 预填帮忙，再点「一键批量存入拉片库」（只保存打勾的镜头，保存后草稿自动清除）。</li>
+      <li>在草稿里逐条填写，或用下面的 AI 预填帮忙，再点「一键批量存入拉片库」（只保存打勾的镜头，保存后草稿自动清除）。每条草稿镜头行上也有「存知识库」按钮，点一下就把这一条直接存进视听语言知识库（已在库里的不会重复存），草稿本身不动。</li>
     </ul>
     <h4>长视频：分段导入</h4>
     <p>60 分钟这样的长片可以直接用「分段导入」：选好每段时长（默认 10 分钟），系统会算出要切成几段（60 分钟就是 6 段），然后一段一段顺序处理，不会同时跑。每段最多 300 个镜头，时间码按原片绝对时间算，不会从 0:00 重算。</p>
