@@ -679,8 +679,12 @@ document.getElementById('batchHeuristic').addEventListener('click', async (e) =>
   if(!db.draft) return;
   const btn = e.currentTarget; btn.disabled = true; btn.textContent = '批量分析中…';
   try {
-    for(const s of db.draft.shots.filter(s=>!s.aiFilled).slice(0,10)){ await aiPrefill(s.id); }
-  } finally { btn.disabled = false; btn.textContent = '批量识图前10个'; }
+    /* 从滑轨当前所在的镜头起处理 10 个（scrubValue 是唯一的“当前镜头”状态，
+       滑轨/箭头/点行/滚动都会同步它）；快到末尾时只处理剩下的；已填过的不重复处理 */
+    const shots = db.draft.shots;
+    const start = Math.min(Math.max(scrubValue || 1, 1), shots.length);
+    for(const s of shots.slice(start - 1, start + 9).filter(s=>!s.aiFilled)){ await aiPrefill(s.id); }
+  } finally { btn.disabled = false; btn.textContent = '批量识图（当前起10个）'; }
 });
 
 /* ---- 顺序预填：服务端 DeepSeek，看前后镜头 + 对白 ----
@@ -709,9 +713,11 @@ document.getElementById('batchSequence').addEventListener('click', async (e) => 
   if(!db.draft) return;
   const btn = e.currentTarget; btn.disabled = true; btn.textContent = '顺序预填中…';
   try {
-    /* 前 10 个镜头按 5 个一组分批调用，每组附带前后各 2 个邻居作上下文，
-       每组只返回该组 5 条结果，避免一次生成全部结果超时。 */
-    const targets = db.draft.shots.slice(0, 10);
+    /* 从滑轨当前所在的镜头起取 10 个目标（scrubValue 是唯一的“当前镜头”状态），
+       按 5 个一组分批调用，每组附带前后各 2 个邻居作上下文，
+       每组只返回该组 5 条结果，避免一次生成全部结果超时。快到末尾时只处理剩下的。 */
+    const start = Math.min(Math.max(scrubValue || 1, 1), db.draft.shots.length);
+    const targets = db.draft.shots.slice(start - 1, start + 9);
     for (let c = 0; c < targets.length; c += 5) {
       const chunk = targets.slice(c, c + 5);
       const chunkStart = db.draft.shots.indexOf(chunk[0]);
@@ -731,7 +737,7 @@ document.getElementById('batchSequence').addEventListener('click', async (e) => 
     }
     saveDraft();
   } catch (err) { alert(String(err.message || err)); }
-  finally { btn.disabled = false; btn.textContent = '顺序预填（前10个）'; renderDraft(); }
+  finally { btn.disabled = false; btn.textContent = '顺序预填（当前起10个）'; renderDraft(); }
 });
 
 /* ---- 字幕：SRT 优先；画面 OCR 用 Tesseract.js（需联网，失败则手动） ---- */
@@ -952,7 +958,7 @@ const HELP = {
     <ul>
       <li><b>识图预填</b>：看关键帧图片，只补景别、机位、构图、光线、画面内容、人物动作、情绪这 7 个能“看出来”的字段，标“AI预填”。运镜、转场、蒙太奇、对白、音乐、音效和“为什么”留空。</li>
       <li><b>顺序预填</b>：看当前镜头和前后镜头、结合对白，推测转场方式、蒙太奇运用和“为什么这样用”，标“AI预填·推测”，请核对后再保存。</li>
-      <li>两个批量按钮都只处理前 10 个镜头；单个镜头也有自己的预填按钮。AI 未配置时会明确报错，不会编造。</li>
+      <li>两个批量按钮都从当前滑轨所在的镜头起处理 10 个镜头（快到末尾时只处理剩下的）；单个镜头也有自己的预填按钮。AI 未配置时会明确报错，不会编造。</li>
     </ul>
     <h4>草稿断点恢复</h4>
     <p>导入草稿会自动保存到浏览器本地缓存（localStorage），切页签、刷新后仍在；中途刷新或中断会显示「继续导入 / 恢复」，点它可从断点接着跑（若视频文件没保住，会提示你重新选择同一个视频文件）。不想要了点「放弃这次导入」。</p>
