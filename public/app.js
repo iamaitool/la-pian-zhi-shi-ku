@@ -95,15 +95,46 @@ function shotCard(s, i){
     <table style="margin-top:10px">${rows}</table>
   </article>`;
 }
-function renderShots(){
+/* ---- 从一条拉片生成知识库条目（单条提炼与批量存入共用，保证一致） ---- */
+function shotToKnowledge(s){
+  return {title:`${s.emotion||'某情绪'}时：${s.shotSize||''}${s.movement? ' + '+s.movement:''}（来自 ${s.title}）`,emotion:s.emotion||'紧张',scene:'',rhythm:'渐紧',tags:[s.shotSize,s.movement].filter(Boolean),desc:s.why||`${s.composition||''}；${s.lighting||''}`,sample:false};
+}
+/* 当前拉片库列表（与 renderShots 同一套搜索 + 情绪筛选） */
+function filteredShots(){
   const q = (document.getElementById('shotSearch').value||'').toLowerCase();
   const em = document.getElementById('shotFilterEmotion').value;
-  const list = db.shots.filter(s => (!em || s.emotion===em) && (!q || [s.title,s.content,s.dialogue,s.shotSize,s.emotion].join(' ').toLowerCase().includes(q)));
+  return db.shots.filter(s => (!em || s.emotion===em) && (!q || [s.title,s.content,s.dialogue,s.shotSize,s.emotion].join(' ').toLowerCase().includes(q)));
+}
+function renderShots(){
+  const list = filteredShots();
   document.getElementById('shotCount').textContent = `共 ${db.shots.length} 条`;
   document.getElementById('shotList').innerHTML = list.length ? list.map(shotCard).join('') : '<p class="muted">没有符合条件的镜头。</p>';
 }
 document.getElementById('shotSearch').addEventListener('input', renderShots);
 document.getElementById('shotFilterEmotion').addEventListener('change', renderShots);
+/* 一键批量存入知识库：按当前列表逐条存入，标题已存在则跳过 */
+document.getElementById('batchExtract').addEventListener('click', async () => {
+  const btn = document.getElementById('batchExtract');
+  const list = filteredShots();
+  if (!list.length) { alert('当前列表没有可存入的拉片。'); return; }
+  if (!confirm(`将把当前列表的 ${list.length} 条拉片存入知识库，确定吗？`)) return;
+  btn.disabled = true; btn.textContent = '正在存入…';
+  try {
+    await refreshData(); /* 拿最新的知识库标题，避免重复存入 */
+    const existing = new Set(db.knowledge.map(k => k.title));
+    let saved = 0, skipped = 0;
+    for (const s of list) {
+      const rec = shotToKnowledge(s);
+      if (existing.has(rec.title)) { skipped++; continue; }
+      await api('/api/knowledge', { method: 'POST', body: JSON.stringify(rec) });
+      existing.add(rec.title); saved++;
+    }
+    await refreshData(); renderKnowledge();
+    alert(`已存入 ${saved} 条，跳过 ${skipped} 条（已存在）。`);
+  } catch (err) {
+    alert('批量存入失败：' + String(err.message || err));
+  } finally { btn.disabled = false; btn.textContent = '一键批量存入知识库'; }
+});
 document.getElementById('clearSamples').addEventListener('click', async () => {
   if(!confirm('只删除标记为“示例”的拉片和知识条目，你自己的数据不会被删。确定吗？')) return;
   await api('/api/clear-samples', { method: 'POST', body: '{}' });
@@ -134,7 +165,7 @@ document.getElementById('shotList').addEventListener('click', async e => {
     const map={title:'f-title',start:'f-start',duration:'f-duration',emotion:'f-emotion',shotSize:'f-shotSize',camera:'f-camera',composition:'f-composition',movement:'f-movement',lighting:'f-lighting',content:'f-content',action:'f-action',dialogue:'f-dialogue',music:'f-music',sfx:'f-sfx',transition:'f-transition',montage:'f-montage',why:'f-why'};
     Object.entries(map).forEach(([k,el])=>document.getElementById(el).value=s[k]??''); window.scrollTo({top:0,behavior:'smooth'}); }
   if(ex){ const s=db.shots.find(x=>x.id===ex.dataset.extract); if(!s) return;
-    await api('/api/knowledge', { method: 'POST', body: JSON.stringify({title:`${s.emotion||'某情绪'}时：${s.shotSize||''}${s.movement? ' + '+s.movement:''}（来自 ${s.title}）`,emotion:s.emotion||'紧张',scene:'',rhythm:'渐紧',tags:[s.shotSize,s.movement].filter(Boolean),desc:s.why||`${s.composition||''}；${s.lighting||''}`,sample:false}) });
+    await api('/api/knowledge', { method: 'POST', body: JSON.stringify(shotToKnowledge(s)) });
     await refreshData(); renderKnowledge(); alert('已提炼到知识库，可在知识库页修改。'); }
 });
 
