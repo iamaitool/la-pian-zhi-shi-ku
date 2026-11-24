@@ -115,11 +115,19 @@ function shotToKnowledge(s){
   const why = kv(s.why);
   if (why) groups.push('【用意】' + why);
   const tags = [...new Set([s.shotSize, s.movement, s.camera, s.composition, s.lighting, s.montage].map(kv).filter(Boolean))].slice(0, 6);
-  return {title:`${s.emotion||'某情绪'}时：${s.shotSize||''}${s.movement? ' + '+s.movement:''}（来自 ${s.title}）`,emotion:s.emotion||'紧张',scene:'',rhythm:'渐紧',tags,desc:groups.join('；'),sample:false};
+  /* 节奏：本地模板也从运镜/蒙太奇/景别里的快慢信号词推导（与 lib/match.js 同一套
+     逻辑），没有信号词为“中”；不用旧的固定默认值“渐紧”，否则慢镜头也会被当成快节奏去匹配。 */
+  const rhythm = (typeof StoryMatch !== 'undefined' && StoryMatch.deriveTempo)
+    ? StoryMatch.deriveTempo([s.movement, s.montage, s.shotSize].join(' '))
+    : '中';
+  return {title:`${s.emotion||'某情绪'}时：${s.shotSize||''}${s.movement? ' + '+s.movement:''}（来自 ${s.title}）`,emotion:s.emotion||'紧张',scene:'',rhythm,tags,desc:groups.join('；'),sample:false};
 }
 /* AI 提炼：AI 已配置时调服务端 /api/ai/extract-knowledge 生成一段连贯的规律描述，
    标题仍用本地规则生成（去重按标题，不受影响）；AI 未配置或调用失败时回退到本地模板，
-   调用方无需处理失败。返回 {rec, ai}，ai 表示本次是否用了 AI 生成。 */
+   调用方无需处理失败。返回 {rec, ai}，ai 表示本次是否用了 AI 生成。
+   AI 返回的 rhythm（快/中/慢）直接存进知识库已有的 rhythm 列；AI 返回的 why
+   不单独存库——知识库表没有 why 列（不动数据库结构），“为什么”已融进 desc 段落里，
+   匹配时从标题 + 描述里读。 */
 async function shotToKnowledgeAI(s){
   const base = shotToKnowledge(s);
   if (!aiConfigured) return { rec: base, ai: false };
@@ -130,7 +138,8 @@ async function shotToKnowledgeAI(s){
     const tags = Array.isArray(out.tags) && out.tags.length
       ? [...new Set(out.tags.map(t => String(t).trim()).filter(Boolean))].slice(0, 6)
       : base.tags;
-    return { rec: { ...base, desc, tags }, ai: true };
+    const rhythm = ['快', '中', '慢'].includes(out.rhythm) ? out.rhythm : base.rhythm;
+    return { rec: { ...base, desc, tags, rhythm }, ai: true };
   } catch (_) {
     return { rec: base, ai: false }; /* AI 失败（超时/未配置/模型错误）时静默回退到模板 */
   }
@@ -252,27 +261,72 @@ document.getElementById('knowList').addEventListener('click', async e => {
 /* ---- storyboard（服务端 AI，按知识库生成） ---- */
 let lastStoryboard = '';
 /* 把分镜行渲染成分镜表，并重建 lastStoryboard（复制/导出用的纯文本）；
-   生成后和点历史还原时共用。 */
-function renderStoryboardResult(rows){
+   生成后和点历史还原时共用。note 为可选提示横幅（本地规则生成时说明来源）。
+   每行显示“依据”（引用的规律标题）和“匹配原因”（为什么选这条规律）。 */
+function renderStoryboardResult(rows, note){
   rows = Array.isArray(rows) ? rows : [];
-  lastStoryboard = rows.map(r=>`镜头 ${r.n}（${r.shotSize}）\n剧本：${r.line}\n依据：${r.rule}\n中文提示词：${r.promptZh}\n英文提示词：${r.promptEn}\n`).join('\n');
+  lastStoryboard = rows.map(r=>`镜头 ${r.n}（${r.shotSize}）\n剧本：${r.line}\n依据：${r.rule}\n匹配：${r.matchReason||'—'}\n中文提示词：${r.promptZh}\n英文提示词：${r.promptEn}\n`).join('\n');
   document.getElementById('sbResult').innerHTML = rows.length ? `<div class="card"><h3>分镜表</h3>
-    <table><tr><th>镜头</th><th>剧本</th><th>景别</th><th>依据</th><th>中文提示词</th><th>英文提示词</th></tr>
-    ${rows.map(r=>`<tr><td>${r.n}</td><td>${esc(r.line)}</td><td>${esc(r.shotSize)}</td><td>${esc(r.rule)}</td><td>${esc(r.promptZh)}</td><td>${esc(r.promptEn)}</td></tr>`).join('')}</table></div>` : '';
+    ${note ? `<p class="warn">${esc(note)}</p>` : ''}
+    <table><tr><th>镜头</th><th>剧本</th><th>景别</th><th>依据</th><th>匹配原因</th><th>中文提示词</th><th>英文提示词</th></tr>
+    ${rows.map(r=>`<tr><td>${r.n}</td><td>${esc(r.line)}</td><td>${esc(r.shotSize)}</td><td>${esc(r.rule)}</td><td>${esc(r.matchReason||'—')}</td><td>${esc(r.promptZh)}</td><td>${esc(r.promptEn)}</td></tr>`).join('')}</table></div>` : '';
+}
+/* 本地规则生成（AI 调用失败时的兜底）：与服务端共用同一套加权打分
+   （情绪+3、场景+2、节奏+2、为什么+3，见 lib/match.js），每行取分最高的规律；
+   提示词是模板拼装，不是 AI 写的，调用处会明确标注。AI 未配置时不走这里
+   （明确报错，不生成）。 */
+const SHOT_SIZE_EN = {'大远景':'Extreme long','远景':'Long','全景':'Wide','中景':'Medium','近景':'Medium close-up','特写':'Close-up','过肩特写':'Over-the-shoulder'};
+const EMOTION_EN = {'紧张':'tense','悬疑':'suspenseful','温馨':'warm','悲伤':'sad','喜悦':'joyful','浪漫':'romantic','愤怒':'angry','恐惧':'fearful','平静':'calm','压抑':'oppressive','震撼':'stunning','孤独':'lonely'};
+const SHOT_SIZES = ['大远景','远景','全景','中景','近景','特写','过肩特写'];
+function pickShotSizeFromRule(rule){
+  if(!rule) return '中景';
+  const text = [rule.title||'', (rule.tags||[]).join(' '), rule.desc||''].join(' ');
+  for (const s of SHOT_SIZES) if (text.indexOf(s) >= 0) return s;
+  return '中景';
+}
+function generateStoryboardLocal({ script, emotion, scene, rhythm, knowledge }){
+  if (typeof StoryMatch === 'undefined' || !StoryMatch.scoreKnowledge) throw new Error('匹配模块未加载，请刷新页面重试');
+  const lines = String(script||'').split('\n').map(s=>s.trim()).filter(Boolean);
+  return lines.map((line, i) => {
+    const ranked = StoryMatch.scoreKnowledge({ line, lineIndex: i, lineCount: lines.length, emotion, sceneType: scene, rhythm, knowledge: knowledge || [] });
+    const top = ranked[0];
+    const rule = (top && top.score > 0) ? top.item : null;
+    const shotSize = pickShotSizeFromRule(rule);
+    const shotEn = SHOT_SIZE_EN[shotSize] || 'Medium';
+    const emEn = EMOTION_EN[emotion] || 'neutral';
+    const reason = rule ? StoryMatch.matchReasonText(top) + '（本地规则，未用 AI）' : '知识库没有匹配的规律，按通用经验生成（本地规则，未用 AI）';
+    return {
+      n: i + 1, line, shotSize,
+      rule: rule ? rule.title : '通用规律',
+      matchReason: reason,
+      promptZh: rule ? `【${shotSize}】${line}；${rule.desc || rule.title}` : `【${shotSize}】${line}`,
+      promptEn: `${shotEn} shot, ${emEn} mood, cinematic, film still`,
+    };
+  });
 }
 document.getElementById('sbGenerate').addEventListener('click', async () => {
   const script = document.getElementById('sb-script').value.trim();
   if(!script){ alert('请先粘贴一段剧本。'); return; }
   const emotion = document.getElementById('sb-emotion').value, scene = document.getElementById('sb-scene').value.trim(), rhythm = document.getElementById('sb-rhythm').value;
   const btn = document.getElementById('sbGenerate'); btn.disabled = true; btn.textContent = '生成中…';
+  const saveHistory = async rows => {
+    await api('/api/storyboards', { method: 'POST', body: JSON.stringify({ script, emotion, scene, rhythm, lines: script.split('\n').filter(Boolean).length, shots: rows }) });
+    await refreshData(); renderHistory();
+  };
   try {
     const out = await aiApi('/api/ai/storyboard', { script, emotion, sceneType: scene, rhythm, knowledge: db.knowledge });
     const rows = out.shots || [];
     renderStoryboardResult(rows);
-    await api('/api/storyboards', { method: 'POST', body: JSON.stringify({ script, emotion, scene, rhythm, lines: script.split('\n').filter(Boolean).length, shots: rows }) });
-    await refreshData(); renderHistory();
+    await saveHistory(rows);
   } catch (err) {
-    alert(String(err.message || err));
+    const msg = String(err.message || err);
+    if (/AI 未配置/.test(msg)) { alert(msg); return; } /* AI 未配置：明确提示，不编造、不生成 */
+    /* AI 调用失败（超时/服务异常）：用本地规则按同一套加权打分直接生成，并明确标注不是 AI 结果 */
+    try {
+      const rows = generateStoryboardLocal({ script, emotion, scene, rhythm, knowledge: db.knowledge });
+      renderStoryboardResult(rows, '本地规则生成：AI 调用失败（' + msg.slice(0, 80) + '），已按知识库加权匹配（情绪+3、场景+2、节奏+2、为什么+3）直接生成，未经 AI 润色；提示词为模板拼装，请自行调整。');
+      await saveHistory(rows);
+    } catch (e2) { alert('生成失败：' + msg); }
   } finally { btn.disabled = false; btn.textContent = '生成分镜'; }
 });
 function renderHistory(){
@@ -970,7 +1024,7 @@ const HELP = {
       <li>点「生成分镜」，稍等片刻，下方出现分镜表。</li>
     </ul>
     <h4>AI 是怎么生成的</h4>
-    <p>服务端 AI（DeepSeek）按你的知识库生成分镜：优先匹配相同情绪的规律，其次匹配场景类型。分镜表每一行都写明“依据”——引用了哪条规律，方便你核对。</p>
+    <p>服务端 AI（DeepSeek）按你的知识库生成分镜：先给每条规律按四维加权打分——情绪相同 +3、场景类型相同 +2、节奏匹配 +2、为什么相近 +3（满分 10 分），每行取分最高的几条候选，再由 AI 从中选最合适的一条并写一句话匹配原因。节奏会看规律本身的快慢和这行在剧本里的位置（渐紧越往后越要快，渐缓反之）；“为什么”比的是剧本这行的意图和规律“为什么这么用”里的意图词。分镜表每一行都写明“依据”和“匹配原因”，方便你核对。</p>
     <h4>复制和导出</h4>
     <ul>
       <li>「复制全部」：把整张分镜表（含中英文提示词）复制到剪贴板。</li>
@@ -980,6 +1034,7 @@ const HELP = {
     <h4>注意事项</h4>
     <ul>
       <li>知识库越丰富，分镜越贴合你的风格；知识库为空时 AI 只能按通用经验生成。</li>
+      <li>AI 调用失败（超时/服务异常）时，会用本地规则按同一套加权打分直接生成，并在分镜表上方明确标注“本地规则生成”，提示词为模板拼装；AI 未配置时仍明确报错，不生成。</li>
       <li>如果顶部状态栏显示 AI 未配置，点生成会明确报错，不会编造结果——需要在 Render 环境变量里设置 AI_API_KEY / AI_BASE_URL / AI_MODEL。</li>
     </ul>` },
   import: { title: '视频导入 — 使用帮助', body: `

@@ -8,6 +8,7 @@ const path = require('path');
 const express = require('express');
 const store = require('./lib/store');
 const ai = require('./lib/ai');
+const match = require('./lib/match');
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -89,15 +90,43 @@ app.post('/api/ai/extract-knowledge', asyncHandler(async (req, res) => {
   } catch (err) { aiErrorResponse(res, err); }
 }));
 
-/* ---- AI：剧本转分镜 ---- */
+/* ---- 匹配逻辑：浏览器加载同一份 lib/match.js，本地规则生成与服务端共用加权打分 ---- */
+app.get('/match.js', (req, res) => res.sendFile(path.join(__dirname, 'lib', 'match.js')));
+
+/* ---- AI：剧本转分镜 ----
+   先在服务端用 lib/match.js 给每行剧本按四维加权打分（情绪+3、场景+2、节奏+2、
+   为什么+3），取每行得分最高的前 4 条作候选（候选池按标题去重），再交给 AI
+   从候选里选最合适的一条并写一句话匹配原因。AI 未配置时 ai.storyboard 会
+   抛配置错误，返回 503 明确提示，不生成、不编造。 */
 app.post('/api/ai/storyboard', asyncHandler(async (req, res) => {
   try {
+    const body = req.body || {};
+    const lines = String(body.script || '').split('\n').map((s) => s.trim()).filter(Boolean);
+    if (!lines.length) return res.status(400).json({ error: '剧本为空' });
+    const knowledge = Array.isArray(body.knowledge) ? body.knowledge : [];
+    const pool = [];
+    const poolKey = new Map();
+    const perLine = lines.map((line, i) => {
+      const top = match.topCandidates(
+        { line, lineIndex: i, lineCount: lines.length, emotion: body.emotion, sceneType: body.sceneType, rhythm: body.rhythm, knowledge },
+        4,
+      );
+      return top.map((t) => {
+        const key = String((t.item && t.item.id) || t.item.title || '');
+        if (!poolKey.has(key)) {
+          poolKey.set(key, pool.length);
+          pool.push({
+            title: t.item.title || '', emotion: t.item.emotion || '', scene: t.item.scene || '',
+            tempo: t.tempo, tags: t.item.tags || [], desc: t.item.desc || '',
+            score: t.score, matched: t.matched, whyWords: t.whyWords,
+          });
+        }
+        return poolKey.get(key);
+      });
+    });
     const out = await ai.storyboard({
-      script: req.body && req.body.script,
-      emotion: req.body && req.body.emotion,
-      sceneType: req.body && req.body.sceneType,
-      rhythm: req.body && req.body.rhythm,
-      knowledge: req.body && req.body.knowledge,
+      lines, emotion: body.emotion, sceneType: body.sceneType, rhythm: body.rhythm,
+      candidates: { pool, perLine },
     });
     res.json({ shots: out });
   } catch (err) { aiErrorResponse(res, err); }

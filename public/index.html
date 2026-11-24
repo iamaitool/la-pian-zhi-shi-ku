@@ -79,7 +79,7 @@
           <div><label>标题</label><input id="k-title" required placeholder="例：对话紧张时用过肩特写 + 缓推"></div>
           <div><label>情绪</label><select id="k-emotion"></select></div>
           <div><label>场景类型</label><input id="k-scene" placeholder="对话戏 / 追逐 / 独白…"></div>
-          <div><label>节奏</label><select id="k-rhythm"><option>渐紧</option><option>渐缓</option><option>快速</option><option>缓慢</option></select></div>
+          <div><label>节奏</label><select id="k-rhythm"><option>渐紧</option><option>渐缓</option><option>快速</option><option>缓慢</option><option>快</option><option>中</option><option>慢</option></select></div>
           <div><label>标签（逗号分隔）</label><input id="k-tags" placeholder="特写, 推镜, 对话"></div>
         </div>
         <label>用法说明</label><textarea id="k-desc"></textarea>
@@ -92,7 +92,7 @@
   <section id="page-storyboard" class="page">
     <div class="card">
       <h2>剧本转分镜 <button type="button" class="help-btn" data-help="storyboard" aria-label="剧本转分镜帮助">?</button></h2>
-      <p class="muted">服务端 AI 按你的知识库生成分镜（优先匹配相同情绪，其次匹配场景类型）。若 AI 未配置，会明确提示，不会编造结果。</p>
+      <p class="muted">服务端 AI 按你的知识库生成分镜（情绪、场景、节奏、为什么四维加权匹配：情绪+3、场景+2、节奏+2、为什么+3）。若 AI 未配置，会明确提示，不会编造结果。</p>
       <div class="grid">
         <div><label>情绪</label><select id="sb-emotion"></select></div>
         <div><label>场景类型</label><input id="sb-scene" placeholder="对话戏 / 追逐 / 独白…"></div>
@@ -193,6 +193,7 @@
 </div>
 
 <div id="hoverPreview"><img alt="关键帧大图"><div class="meta"></div></div>
+<script src="/match.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
