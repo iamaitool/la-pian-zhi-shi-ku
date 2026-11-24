@@ -165,7 +165,9 @@
       <p class="muted">导入草稿自动保存（浏览器本地缓存），切页签、刷新后仍在；批量存入拉片库后自动清除草稿。拉片库数据本身存在 Supabase。</p>
       <div id="shotScrubber" class="scrubber" style="display:none">
         <label for="shotScrubberRange" style="margin:0;white-space:nowrap">快速定位镜头</label>
+        <button type="button" id="scrubPrev" class="scrub-arrow" aria-label="上一个镜头">‹</button>
         <input id="shotScrubberRange" type="range" min="1" max="1" value="1" step="1">
+        <button type="button" id="scrubNext" class="scrub-arrow" aria-label="下一个镜头">›</button>
         <span class="muted" id="scrubLabel" style="white-space:nowrap">第 1 / 共 0 个镜头</span>
       </div>
       <div class="row">

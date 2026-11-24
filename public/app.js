@@ -394,8 +394,11 @@ document.getElementById('draftList').addEventListener('click', e => {
 
 /* ---- 镜头游标滑轨：拖动滑到第 N 个镜头，镜头表滚动到该镜头置顶并短暂高亮 ----
    编号是整份草稿的全局序号（分段草稿也一样），拖到 10 就是全局第 10 个镜头。
+   滚动只发生在 #draftList 容器内部（容器有固定高度、自己滚），绝不滚整页，
+   滑轨用 position:sticky 吸在页签导航下方，拖动时滑轨和上面页面都不动，只有下面镜头区动。
    renderDraft 会整体重渲染草稿列表，所以滑轨位置记在 scrubValue 变量里，渲染时恢复；
-   手动滚动/点镜头行会同步滑轨，但拖动时拖动优先（scrubDragging 为 true 时不同步）。 */
+   手动滚动/点镜头行会同步滑轨，但拖动时拖动优先（scrubDragging 为 true 时不同步）。
+   滑轨两边的 ‹ › 按钮点一下前后移动一个镜头，到头自动禁用。 */
 let scrubDragging = false;
 let scrubValue = 1;
 let scrubFlashTimer = null;
@@ -406,19 +409,34 @@ function updateScrubber(){
   const n = db.draft ? db.draft.shots.length : 0;
   if(!n){ box.style.display = 'none'; return; }
   box.style.display = 'flex';
+  /* 吸顶位置按实际导航高度算（窄屏导航换行变高时也不会盖住导航） */
+  box.style.top = (((document.querySelector('nav') || {}).offsetHeight) || 0) + 'px';
   scrubValue = Math.min(Math.max(scrubValue || 1, 1), n);
   range.max = n;
   range.value = scrubValue;
   document.getElementById('scrubLabel').textContent = `第 ${scrubValue} / 共 ${n} 个镜头`;
+  document.getElementById('scrubPrev').disabled = scrubValue <= 1;
+  document.getElementById('scrubNext').disabled = scrubValue >= n;
 }
 function scrollToShot(n, smooth){
   const row = scrubRows()[n - 1]; if(!row) return;
-  const navH = (document.querySelector('nav') || {}).offsetHeight || 0;
-  window.scrollTo({ top: row.getBoundingClientRect().top + window.scrollY - navH - 8, behavior: smooth ? 'smooth' : 'auto' });
+  /* 只滚 #draftList 容器内部：按目标行相对容器的位置算 scrollTop，整页不动 */
+  const list = document.getElementById('draftList');
+  const top = list.scrollTop + row.getBoundingClientRect().top - list.getBoundingClientRect().top - 8;
+  list.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' });
   row.classList.add('scrub-target');
   clearTimeout(scrubFlashTimer);
   scrubFlashTimer = setTimeout(() => row.classList.remove('scrub-target'), 1600);
 }
+/* 滑轨两边的 ‹ › 按钮：点一下前后移动一个镜头 */
+function scrubStep(delta){
+  const n = db.draft ? db.draft.shots.length : 0; if(!n) return;
+  scrubValue = Math.min(Math.max((scrubValue || 1) + delta, 1), n);
+  updateScrubber();
+  scrollToShot(scrubValue, true);
+}
+document.getElementById('scrubPrev').addEventListener('click', () => scrubStep(-1));
+document.getElementById('scrubNext').addEventListener('click', () => scrubStep(1));
 document.getElementById('shotScrubberRange').addEventListener('input', () => {
   scrubDragging = true;
   scrubValue = Number(document.getElementById('shotScrubberRange').value);
@@ -429,9 +447,9 @@ document.getElementById('shotScrubberRange').addEventListener('change', () => {
   scrubDragging = false;
   scrollToShot(scrubValue, true);
 });
-/* 手动滚动列表时同步滑轨到当前置顶的镜头（拖动时不同步，拖动优先） */
+/* 手动滚动镜头表时同步滑轨到当前置顶的镜头（拖动时不同步，拖动优先） */
 let scrubScrollTick = false;
-window.addEventListener('scroll', () => {
+document.getElementById('draftList').addEventListener('scroll', () => {
   if(scrubDragging || scrubScrollTick) return;
   if(!document.getElementById('page-import').classList.contains('active')) return;
   if(!db.draft || !db.draft.shots.length) return;
@@ -439,9 +457,10 @@ window.addEventListener('scroll', () => {
   requestAnimationFrame(() => {
     scrubScrollTick = false;
     if(scrubDragging || !db.draft || !db.draft.shots.length) return;
-    const navH = (document.querySelector('nav') || {}).offsetHeight || 0;
+    const list = document.getElementById('draftList');
+    const top = list.getBoundingClientRect().top + 8;
     const rows = scrubRows();
-    let idx = rows.findIndex(r => r.getBoundingClientRect().bottom > navH + 8);
+    let idx = rows.findIndex(r => r.getBoundingClientRect().bottom > top);
     if(idx < 0) idx = rows.length - 1;
     if(idx >= 0 && idx + 1 !== scrubValue){ scrubValue = idx + 1; updateScrubber(); }
   });
@@ -706,7 +725,7 @@ const HELP = {
     <h4>草稿断点恢复</h4>
     <p>导入草稿会自动保存到浏览器本地缓存（localStorage），切页签、刷新后仍在；中途刷新或中断会显示「继续导入 / 恢复」，点它可从断点接着跑（若视频文件没保住，会提示你重新选择同一个视频文件）。不想要了点「放弃这次导入」。</p>
     <h4>小技巧</h4>
-    <p>鼠标停在关键帧上可看大图；草稿里每条前面的复选框可取消勾选，不想存入拉片库的镜头去掉勾即可。镜头多了可以用草稿上方的「快速定位镜头」滑轨：拖到第 N 个，镜头表就会滚动到第 N 个镜头置顶并高亮，方便快速定位。</p>` },
+    <p>鼠标停在关键帧上可看大图；草稿里每条前面的复选框可取消勾选，不想存入拉片库的镜头去掉勾即可。镜头多了可以用草稿上方的「快速定位镜头」滑轨：拖到第 N 个，下面镜头表就滚动到第 N 个镜头置顶并高亮，拖动时滑轨固定不动；滑轨两边的 ‹ › 按钮点一下前后移动一个镜头。</p>` },
 };
 function openHelp(key){
   const h = HELP[key]; if(!h) return;
