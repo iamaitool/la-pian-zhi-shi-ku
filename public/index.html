@@ -153,7 +153,7 @@
 
     <div class="card">
       <h3>字幕来源</h3>
-      <p class="muted">优先用 SRT 字幕文件（最准）。没有 SRT 时，可用画面字幕 OCR 识别全部未填对白的镜头（需联网加载 Tesseract.js；只认关键帧底部的字幕，若加载失败，请改用手动填对白）。内嵌字幕轨浏览器一般读不到，会如实提示。注意：识图预填不补对白，对白只能靠这里的 OCR 或 SRT。</p>
+      <p class="muted">优先用 SRT 字幕文件（最准）。没有 SRT 时，可用画面字幕 OCR 识别全部未填对白的镜头（需联网加载 Tesseract.js；只认关键帧底部的中文字幕，识别前会做放大、二值化、白底黑字预处理，若加载失败，请改用手动填对白；英文字幕请用 SRT）。内嵌字幕轨浏览器一般读不到，会如实提示。注意：识图预填不补对白，对白只能靠这里的 OCR 或 SRT。</p>
       <div class="row">
         <input id="srtFile" type="file" accept=".srt,text/plain" style="flex:1">
         <button id="ocrBtn">识别画面字幕（OCR）</button>

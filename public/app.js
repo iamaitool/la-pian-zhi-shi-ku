@@ -715,17 +715,49 @@ document.getElementById('srtFile').addEventListener('change', e => {
   }; r.readAsText(f);
 });
 /* ---- 画面字幕 OCR：只认关键帧底部约三分之一的字幕带 ----
-   字幕通常在画面底部，整帧识别容易把画面里的大标题也当成对白；
-   裁出底部字幕带（并放大 2 倍）再识别。裁切失败时回退到整帧识别。 */
-function cropSubtitleBand(dataUrl){
+   字幕通常在画面底部，整帧识别容易把画面里的大标题也当成对白。
+   乱码的教训：以前直接把彩色小图（关键帧最长边只有 320px）丢给
+   Tesseract，白字黑底不做处理、默认 PSM 3、chi_sim+eng 混读，
+   结果就是 "—(l)y0H 区 [四 Eee 本 加 美 国 椒" 这种中英混杂的乱码。
+   现在先做预处理再识别：裁出底部字幕带、放大 3 倍、灰度化、
+   Otsu 二值化、白底黑字（暗底白字时反色），只读 chi_sim，
+   PSM 6（整齐的一块字幕文字）。预处理失败时回退到整帧识别。 */
+function preprocessSubtitleBand(dataUrl){
   return new Promise((res, rej) => {
     const img = new Image();
     img.onload = () => {
       const h = Math.max(1, Math.round(img.height * 0.35));
+      const scale = 3;
       const c = document.createElement('canvas');
-      c.width = img.width * 2; c.height = h * 2;
+      c.width = img.width * scale; c.height = h * scale;
       const ctx = c.getContext('2d');
       ctx.drawImage(img, 0, img.height - h, img.width, h, 0, 0, c.width, c.height);
+      /* 灰度 + Otsu 二值化 + 统一成白底黑字（Tesseract 最擅长的形式） */
+      const id = ctx.getImageData(0, 0, c.width, c.height);
+      const d = id.data, n = d.length / 4;
+      const gray = new Uint8Array(n), hist = new Array(256).fill(0);
+      for (let i = 0; i < n; i++) {
+        const g = Math.round(0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]);
+        gray[i] = g; hist[g]++;
+      }
+      let sum = 0; for (let t = 0; t < 256; t++) sum += t * hist[t];
+      let sumB = 0, wB = 0, best = 0, thr = 127;
+      for (let t = 0; t < 256; t++) {
+        wB += hist[t]; if (!wB) continue;
+        const wF = n - wB; if (!wF) break;
+        sumB += t * hist[t];
+        const mB = sumB / wB, mF = (sum - sumB) / wF;
+        const between = wB * wF * (mB - mF) * (mB - mF);
+        if (between > best) { best = between; thr = t; }
+      }
+      let bright = 0; for (let i = 0; i < n; i++) if (gray[i] > thr) bright++;
+      const invert = bright / n < 0.5; /* 暗底白字 -> 反色成白底黑字 */
+      for (let i = 0; i < n; i++) {
+        let v = gray[i] > thr ? 255 : 0;
+        if (invert) v = 255 - v;
+        d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; d[i * 4 + 3] = 255;
+      }
+      ctx.putImageData(id, 0, 0);
       res(c.toDataURL('image/png'));
     };
     img.onerror = () => rej(new Error('关键帧图片加载失败'));
@@ -743,12 +775,17 @@ document.getElementById('ocrBtn').addEventListener('click', async () => {
        232 个镜头的草稿里第 11 个之后永远拿不到对白。 */
     const targets = db.draft.shots.filter(s => !(s.dialogue||'').trim());
     if(!targets.length){ status.textContent = '所有镜头都已有对白，无需识别。'; note.textContent=''; return; }
-    const worker = await Tesseract.createWorker('chi_sim+eng');
+    /* 只读简体中文：chi_sim+eng 混读时英文模型会把汉字笔画猜成拉丁字母，
+       正是之前 "Eee / (l)y0H" 这类乱码的来源之一。英文字幕请用 SRT。 */
+    const worker = await Tesseract.createWorker('chi_sim');
+    /* PSM 6：把字幕带当作整齐的一块文字识别；默认 PSM 3 会按整页版式切分，
+       在这么小的图上容易把字切碎、拼出乱码。 */
+    await worker.setParameters({ tessedit_pageseg_mode: '6' });
     let done=0, got=0;
     try{
       for(const s of targets){
         let img = s.thumb;
-        try{ img = await cropSubtitleBand(s.thumb); }catch(_){ /* 裁切失败就用整帧识别 */ }
+        try{ img = await preprocessSubtitleBand(s.thumb); }catch(_){ /* 预处理失败就用整帧识别 */ }
         const {data} = await worker.recognize(img);
         const text = (data.text||'').replace(/\s+/g,' ').trim();
         if(text){ s.dialogue=text; s.subtitleSource='画面OCR（置信度 '+(Math.round((data.confidence||0)))+'，可能有错字，请核对）'; got++; }
