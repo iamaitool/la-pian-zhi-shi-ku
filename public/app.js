@@ -63,9 +63,11 @@ async function refreshData() {
   ]);
   db.shots = shots; db.knowledge = knowledge; db.history = history;
 }
+let aiConfigured = false; /* 服务端 AI 是否已配置（由健康检查更新）；未配置时提炼直接用本地模板，不发 AI 请求 */
 async function refreshHealth() {
   try {
     const h = await api('/api/health');
+    aiConfigured = !!h.aiConfigured;
     const el = document.getElementById('aiStatus');
     if (el) el.textContent = (h.aiConfigured ? 'AI 已配置（DeepSeek，服务端调用）' : 'AI 未配置：' + AI_NOT_CONFIGURED_MSG) +
       ' · 数据：' + (h.neonConfigured ? "Neon 已连接" : "Neon 未配置，当前为内存存储（重启会丢）");
@@ -96,7 +98,8 @@ function shotCard(s, i){
   </article>`;
 }
 /* ---- 从一条拉片生成知识库条目（单条提炼、批量存入、草稿存知识库共用，保证一致） ----
-   用法说明保留镜头全部已填字段，按画面 / 声音 / 衔接 / 用意分组；空字段和“待填写”占位不写入 ---- */
+   本地模板（兜底）：用法说明保留镜头全部已填字段，按画面 / 声音 / 衔接 / 用意分组；
+   空字段和“待填写”占位不写入。AI 已配置时优先用 shotToKnowledgeAI 的连贯描述。 ---- */
 function shotToKnowledge(s){
   const kv = v => { const t = String(v ?? '').trim(); return (t && t !== '待填写') ? t : ''; };
   const part = pairs => pairs.map(([label, val]) => kv(val) ? `${label}：${kv(val)}` : '').filter(Boolean).join('；');
@@ -111,6 +114,24 @@ function shotToKnowledge(s){
   if (why) groups.push('【用意】' + why);
   const tags = [...new Set([s.shotSize, s.movement, s.camera, s.composition, s.lighting, s.montage].map(kv).filter(Boolean))].slice(0, 6);
   return {title:`${s.emotion||'某情绪'}时：${s.shotSize||''}${s.movement? ' + '+s.movement:''}（来自 ${s.title}）`,emotion:s.emotion||'紧张',scene:'',rhythm:'渐紧',tags,desc:groups.join('；'),sample:false};
+}
+/* AI 提炼：AI 已配置时调服务端 /api/ai/extract-knowledge 生成一段连贯的规律描述，
+   标题仍用本地规则生成（去重按标题，不受影响）；AI 未配置或调用失败时回退到本地模板，
+   调用方无需处理失败。返回 {rec, ai}，ai 表示本次是否用了 AI 生成。 */
+async function shotToKnowledgeAI(s){
+  const base = shotToKnowledge(s);
+  if (!aiConfigured) return { rec: base, ai: false };
+  try {
+    const out = await aiApi('/api/ai/extract-knowledge', { shot: s });
+    const desc = typeof out.desc === 'string' ? out.desc.trim() : '';
+    if (!desc) return { rec: base, ai: false };
+    const tags = Array.isArray(out.tags) && out.tags.length
+      ? [...new Set(out.tags.map(t => String(t).trim()).filter(Boolean))].slice(0, 6)
+      : base.tags;
+    return { rec: { ...base, desc, tags }, ai: true };
+  } catch (_) {
+    return { rec: base, ai: false }; /* AI 失败（超时/未配置/模型错误）时静默回退到模板 */
+  }
 }
 /* 当前拉片库列表（与 renderShots 同一套搜索 + 情绪筛选） */
 function filteredShots(){
@@ -131,13 +152,13 @@ document.getElementById('batchExtract').addEventListener('click', async () => {
   const list = filteredShots();
   if (!list.length) { alert('当前列表没有可存入的拉片。'); return; }
   if (!confirm(`将把当前列表的 ${list.length} 条拉片存入知识库，确定吗？`)) return;
-  btn.disabled = true; btn.textContent = '正在存入…';
+  btn.disabled = true; btn.textContent = aiConfigured ? 'AI 生成中…' : '正在存入…';
   try {
     await refreshData(); /* 拿最新的知识库标题，避免重复存入 */
     const existing = new Set(db.knowledge.map(k => k.title));
     let saved = 0, skipped = 0;
     for (const s of list) {
-      const rec = shotToKnowledge(s);
+      const { rec } = await shotToKnowledgeAI(s); /* AI 失败时该条自动回退到模板，不中断整批 */
       if (existing.has(rec.title)) { skipped++; continue; }
       await api('/api/knowledge', { method: 'POST', body: JSON.stringify(rec) });
       existing.add(rec.title); saved++;
@@ -178,10 +199,10 @@ document.getElementById('shotList').addEventListener('click', async e => {
     const map={title:'f-title',start:'f-start',duration:'f-duration',emotion:'f-emotion',shotSize:'f-shotSize',camera:'f-camera',composition:'f-composition',movement:'f-movement',lighting:'f-lighting',content:'f-content',action:'f-action',dialogue:'f-dialogue',music:'f-music',sfx:'f-sfx',transition:'f-transition',montage:'f-montage',why:'f-why'};
     Object.entries(map).forEach(([k,el])=>document.getElementById(el).value=s[k]??''); window.scrollTo({top:0,behavior:'smooth'}); }
   if(ex){ const s=db.shots.find(x=>x.id===ex.dataset.extract); if(!s) return;
-    const btn = ex; btn.disabled = true; btn.textContent = '提炼中…';
+    const btn = ex; btn.disabled = true; btn.textContent = aiConfigured ? 'AI 生成中…' : '提炼中…';
     const done = msg => { btn.textContent = msg; setTimeout(()=>{ btn.disabled = false; btn.textContent = '提炼到知识库'; }, 1800); };
     try {
-      const rec = shotToKnowledge(s);
+      const { rec } = await shotToKnowledgeAI(s); /* AI 失败时自动回退到本地模板 */
       await refreshData(); /* 拿最新知识库标题，已在库里的不重复存 */
       if (db.knowledge.some(k => k.title === rec.title)) { done('已在库里 ✓'); return; }
       await api('/api/knowledge', { method: 'POST', body: JSON.stringify(rec) });
@@ -500,10 +521,10 @@ document.getElementById('draftList').addEventListener('click', e => {
    按生成标题去重，已在库里的不重复存；草稿本身不动、不清除 ---- */
 async function extractDraftShot(id, btn){
   const s = db.draft && db.draft.shots.find(x => x.id === id); if(!s) return;
-  const rec = shotToKnowledge(s);
-  if(btn){ btn.disabled = true; btn.textContent = '正在存入…'; }
+  if(btn){ btn.disabled = true; btn.textContent = aiConfigured ? 'AI 生成中…' : '正在存入…'; }
   const done = msg => { if(!btn) return; btn.textContent = msg; setTimeout(()=>{ btn.disabled = false; btn.textContent = '存知识库'; }, 1800); };
   try {
+    const { rec } = await shotToKnowledgeAI(s); /* AI 失败时自动回退到本地模板 */
     await refreshData(); /* 拿最新的知识库标题，避免重复存入 */
     if (db.knowledge.some(k => k.title === rec.title)) { done('已在库里 ✓'); return; }
     await api('/api/knowledge', { method: 'POST', body: JSON.stringify(rec) });

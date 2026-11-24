@@ -81,6 +81,14 @@ app.post('/api/ai/analyze-sequence', asyncHandler(async (req, res) => {
   } catch (err) { aiErrorResponse(res, err); }
 }));
 
+/* ---- AI：提炼到知识库（单条拉片 → 一段连贯的规律描述） ---- */
+app.post('/api/ai/extract-knowledge', asyncHandler(async (req, res) => {
+  try {
+    const out = await ai.extractKnowledge({ shot: req.body && req.body.shot });
+    res.json(out);
+  } catch (err) { aiErrorResponse(res, err); }
+}));
+
 /* ---- AI：剧本转分镜 ---- */
 app.post('/api/ai/storyboard', asyncHandler(async (req, res) => {
   try {
