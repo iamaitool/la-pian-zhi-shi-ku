@@ -582,7 +582,7 @@ function renderDraft(){
       ${s.thumb?`<img class="thumb" src="${s.thumb}" alt="关键帧" data-num="${i+1}" data-start="${esc(s.start)}" data-duration="${esc(s.duration)}" tabindex="0">`:''}
       <div style="flex:1"><strong>#${i+1} 开始 ${esc(s.start)}</strong> <span class="kbd">时长 ${esc(s.duration)} 秒</span>
       ${s.aiFilled?' <span class="badge ai">AI预填</span>':''}${s.subtitleSource?` <span class="badge">字幕来源：${esc(s.subtitleSource)}</span>`:''}</div>
-      <div class="row"><input type="checkbox" data-check="${s.id}" ${s.checked!==false?'checked':''} style="width:20px;height:20px"><button data-heuristic="${s.id}" title="看关键帧图片，只补能“看出来”的画面类字段：景别、机位、构图、光线、画面内容、人物动作、情绪。" ${aiBusy.has('h:'+s.id)?'disabled':''}>${aiBusy.has('h:'+s.id)?'分析中…':'识图预填'}</button><button data-sequence="${s.id}" title="看当前镜头和前后镜头、结合对白，推测转场方式、蒙太奇运用和“为什么这样用”（标“推测”，请核对）。" ${aiBusy.has('s:'+s.id)?'disabled':''}>${aiBusy.has('s:'+s.id)?'预填中…':'顺序预填'}</button><button data-recapture="${s.id}">重截关键帧</button><button data-extract-draft="${s.id}">存知识库</button><button data-del-draft="${s.id}">删除此镜</button></div>
+      <div class="row"><input type="checkbox" data-check="${s.id}" ${s.checked!==false?'checked':''} style="width:20px;height:20px"><button data-heuristic="${s.id}" title="看关键帧图片，只补能“看出来”的画面类字段：景别、机位、构图、光线、画面内容、人物动作、情绪。" ${aiBusy.has('h:'+s.id)?'disabled':''}>${aiBusy.has('h:'+s.id)?'分析中…':'识图预填'}</button><button data-sequence="${s.id}" title="看当前镜头和前后镜头、结合对白，推测转场方式、蒙太奇运用和“为什么这样用”（标“推测”，请核对）。" ${aiBusy.has('s:'+s.id)?'disabled':''}>${aiBusy.has('s:'+s.id)?'预填中…':'顺序预填'}</button><button data-recapture="${s.id}" title="先把上方原视频预览拖到想要的画面并暂停，再点此按钮：用预览当前画面替换该镜头的关键帧截图。开始时间、时长和分析字段不变。">重截关键帧</button><button data-extract-draft="${s.id}">存知识库</button><button data-del-draft="${s.id}">删除此镜</button></div>
     </div>
     <div class="shot-fields">${FIELDS.map(f=>draftField(s,f)).join('')}</div>
   </article>`;
@@ -646,9 +646,10 @@ async function extractDraftShot(id, btn){
   }
 }
 
-/* ---- 重截关键帧：给已有草稿的某个镜头重新截一张整帧缩略图 ----
-   旧草稿里的缩略图是裁过的 data URL，修不回来；视频文件还在当前浏览器里时，
-   可跳到该镜头开始时间重截一张（按新逻辑截整帧），刷新后需先重选同一视频文件。 */
+/* ---- 重截关键帧：用原视频预览当前停留的画面，替换某个草稿镜头的关键帧截图 ----
+   用户先把上方原视频预览拖到想要的画面并暂停，再点该镜头行的「重截关键帧」；
+   截的是预览当前时间（player.currentTime）的整帧，不再跳到该镜头开始时间。
+   只换 thumb，镜头的开始时间、时长和分析字段都不变；刷新后需先重选同一视频文件。 */
 async function recaptureThumb(id){
   const s = db.draft && db.draft.shots.find(x => x.id === id); if(!s) return;
   if(!currentVideoFile || !player.src) return alert('请先重新选择同一视频文件，再重截关键帧。');
@@ -656,7 +657,9 @@ async function recaptureThumb(id){
   if(!document.getElementById('cancelImport').disabled) return alert('切分检测进行中，稍后再试。');
   try {
     player.pause();
-    await seekTo(Math.min(parseTime(s.start) + 0.05, Math.max(parseTime(s.start), player.duration - 0.01)));
+    /* 刚拖过预览、seek 还没落定时等 seeked 落定（800ms 兜底），再等两帧让暂停画面真正呈现出来 */
+    if(player.seeking) await new Promise(res => { const done = () => { player.removeEventListener('seeked', done); res(); }; player.addEventListener('seeked', done); setTimeout(done, 800); });
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
     const thumb = captureThumbFromPlayer();
     if(!thumb) return alert('没取到视频画面，等一下再试。');
     s.thumb = thumb; saveDraft(); renderDraft();
@@ -1117,7 +1120,7 @@ const HELP = {
     <h4>草稿断点恢复</h4>
     <p>导入草稿会自动保存到浏览器本地缓存（localStorage），切页签、刷新后仍在；中途刷新或中断会显示「继续导入 / 恢复」，点它可从断点接着跑（若视频文件没保住，会提示你重新选择同一个视频文件）。不想要了点「放弃这次导入」。</p>
     <h4>小技巧</h4>
-    <p>鼠标停在关键帧上可看大图；草稿里每条前面的复选框可取消勾选，不想存入拉片库的镜头去掉勾即可。镜头多了可以用草稿上方的「快速定位镜头」滑轨：拖到第 N 个，下面镜头表就滚动到第 N 个镜头置顶并高亮，拖动时滑轨固定不动；滑轨两边的 ‹ › 按钮点一下前后移动一个镜头。拖滑轨、点箭头或点某条镜头时，草稿上方的原视频预览也会跳到该镜头的开始时间并暂停，方便对照原视频核对信息；若刷新后还没重新选择视频文件，预览下方会提示重选同一文件后再定位。</p>` },
+    <p>鼠标停在关键帧上可看大图；草稿里每条前面的复选框可取消勾选，不想存入拉片库的镜头去掉勾即可。镜头多了可以用草稿上方的「快速定位镜头」滑轨：拖到第 N 个，下面镜头表就滚动到第 N 个镜头置顶并高亮，拖动时滑轨固定不动；滑轨两边的 ‹ › 按钮点一下前后移动一个镜头。拖滑轨、点箭头或点某条镜头时，草稿上方的原视频预览也会跳到该镜头的开始时间并暂停，方便对照原视频核对信息；若刷新后还没重新选择视频文件，预览下方会提示重选同一文件后再定位。关键帧不满意：把上方原视频预览拖到想要的画面并暂停，再点该镜头行的「重截关键帧」，就用预览当前画面替换旧截图；镜头的开始时间、时长和分析字段都不变。刷新后需先重选同一视频文件才能重截。</p>` },
 };
 function openHelp(key){
   const h = HELP[key]; if(!h) return;
