@@ -2,9 +2,11 @@
    数据 CRUD 走 /api（服务端 → Neon Postgres；未配 Neon 时服务端用内存存储）。
    AI 功能（识图预填 / 顺序预填 / 剧本转分镜）走 /api/ai/*（服务端调用 DeepSeek，
    密钥只在服务端，绝不发给浏览器）。AI 未配置时明确提示，绝不编造结果。
-   localStorage 只用作视频导入草稿的离线缓存。 */
+   视频导入草稿存服务端 Neon（import_drafts 表，只存一条 id='current'，upsert，
+   单份上限 50MB，远低于 Neon 免费额度 1GB/项目），localStorage 只作离线缓存/兜底。 */
 'use strict';
 const DRAFT_LS = 'lapian-fullstack-draft-v1';
+const DRAFT_MAX_BYTES = 50 * 1024 * 1024; /* 单份草稿服务端保存上限：Neon 免费额度 1GB/项目的约 5% */
 const FIELDS = ['shotSize','camera','composition','movement','lighting','content','action','emotion','dialogue','music','sfx','transition','montage','why'];
 const FIELD_LABEL = {shotSize:'景别',camera:'机位',composition:'构图',movement:'运镜',lighting:'光线',content:'画面内容',action:'人物动作',emotion:'情绪',dialogue:'对白',music:'背景音乐',sfx:'音效',transition:'转场方式',montage:'蒙太奇运用',why:'为什么这样用'};
 const AI_NOT_CONFIGURED_MSG = 'AI 未配置，请在 Render 环境变量里设置 AI_API_KEY / AI_BASE_URL / AI_MODEL';
@@ -49,13 +51,85 @@ function loadDraftFromCache() {
   try { const raw = localStorage.getItem(DRAFT_LS); if (raw) { const d = JSON.parse(raw); if (d && Array.isArray(d.shots)) return d; } } catch (e) {}
   return null;
 }
+/* ---- 导入草稿：服务端持久化（Neon import_drafts 表，只存一条 id='current'，
+   upsert，重复保存不会长出新行）+ 本机 localStorage 缓存 ----
+   草稿只在用户手动清除或批量存入拉片库时删除；刷新、换设备、换浏览器后
+   下次打开都从服务端恢复同样的镜头和数量。服务端保存防抖 2 秒（连续切分
+   时最长 10 秒刷一次）+ 页面隐藏时立即刷一次；保存状态显示在草稿区的
+   #draftSaveStatus，数据库用量显示在 #dbSizeLine。 */
+let draftServerTimer = null;
+let draftServerSaving = false;
+let draftServerDirty = false;
+let draftLastServerSaveAt = 0;
+function draftSaveStatus(text, ok) {
+  const el = document.getElementById('draftSaveStatus');
+  if (el) { el.textContent = text; el.style.color = ok === false ? '#b91c1c' : ''; }
+}
+function saveDraftToLocal() {
+  if (!db.draft) return;
+  try { localStorage.setItem(DRAFT_LS, JSON.stringify(db.draft)); } catch (e) {}
+}
+function draftPayloadBytes() {
+  try { return new TextEncoder().encode(JSON.stringify(db.draft)).length; } catch (e) { return 0; }
+}
+async function saveDraftToServer() {
+  if (!db.draft) return;
+  if (draftServerSaving) { draftServerDirty = true; return; }
+  const bytes = draftPayloadBytes();
+  if (bytes > DRAFT_MAX_BYTES) {
+    draftSaveStatus(`草稿约 ${(bytes / 1048576).toFixed(1)} MB，超过 50 MB 上限，未保存到服务器；本机缓存仍保留，请分段存入拉片库后清除草稿再继续。`, false);
+    return;
+  }
+  draftServerSaving = true; draftServerDirty = false; draftLastServerSaveAt = Date.now();
+  draftSaveStatus('保存中…');
+  try {
+    await api('/api/import-drafts/current', { method: 'PUT', body: JSON.stringify(db.draft) });
+    draftSaveStatus('已保存到服务器 ' + (db.draft.savedAt || ''), true);
+    refreshDbSize();
+  } catch (e) {
+    draftSaveStatus('服务器保存失败，仅保存在本机缓存：' + (e.message || e), false);
+  } finally {
+    draftServerSaving = false;
+    if (draftServerDirty) { draftServerDirty = false; scheduleServerDraftSave(); }
+  }
+}
+function scheduleServerDraftSave() {
+  clearTimeout(draftServerTimer);
+  const since = Date.now() - draftLastServerSaveAt;
+  draftServerTimer = setTimeout(saveDraftToServer, since > 10000 ? 500 : 2000);
+}
+function flushServerDraftSave() {
+  /* 页面隐藏/关闭时立即刷一次（keepalive，页面卸载也不丢）；超上限的不发 */
+  if (!db.draft || draftPayloadBytes() > DRAFT_MAX_BYTES) return;
+  try {
+    fetch('/api/import-drafts/current', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(db.draft), keepalive: true });
+  } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushServerDraftSave(); });
+window.addEventListener('pagehide', flushServerDraftSave);
+async function refreshDbSize() {
+  const el = document.getElementById('dbSizeLine');
+  if (!el) return;
+  try {
+    const r = await api('/api/db-size');
+    el.textContent = r.available ? `数据库已用 ${r.mb} MB / 免费额度 ${r.limitMb} MB` : '数据库用量暂不可用';
+  } catch (e) { el.textContent = '数据库用量暂不可用'; }
+}
 function saveDraft() {
   if (db.draft) {
     db.draft.savedAt = new Date().toLocaleTimeString();
-    try { localStorage.setItem(DRAFT_LS, JSON.stringify(db.draft)); } catch (e) {}
+    saveDraftToLocal();
+    scheduleServerDraftSave();
     const el = document.getElementById('importProgressText');
     if (el) el.textContent = (db.draft.phase || '草稿') + ' · 已自动保存：' + db.draft.savedAt;
   }
+}
+async function loadDraftFromServer() {
+  try { const d = await api('/api/import-drafts/current'); if (d && Array.isArray(d.shots)) return d; } catch (e) {}
+  return null;
+}
+async function deleteDraftFromServer() {
+  try { await api('/api/import-drafts/current', { method: 'DELETE' }); } catch (e) {}
 }
 async function refreshData() {
   const [shots, knowledge, history] = await Promise.all([
@@ -447,7 +521,22 @@ document.getElementById('resumeImport').addEventListener('click', async () => {
   const from = d.shots.length ? parseTime(d.shots[d.shots.length-1].start) + (d.shots[d.shots.length-1].duration||0) : 0;
   await detectShots(from);
 });
-document.getElementById('discardDraft').addEventListener('click', () => { if(confirm('放弃这次导入草稿？')){ db.draft=null; try{localStorage.removeItem(DRAFT_LS);}catch(e){} renderDraft(); document.getElementById('resumeImport').style.display='none'; document.getElementById('discardDraft').style.display='none'; document.getElementById('importStatus').style.display='none'; } });
+/* 清除草稿：只有用户手动点「清除草稿」/「放弃这次导入」，或批量存入拉片库后，
+   草稿才会被清除——服务端那一行和本机缓存一起删，数据库空间随即释放。 */
+async function clearDraft() {
+  if (!confirm('清除这次导入草稿？服务端和本机保存的草稿都会删掉，下次打开就不再恢复这些镜头。')) return;
+  db.draft = null;
+  try { localStorage.removeItem(DRAFT_LS); } catch (e) {}
+  await deleteDraftFromServer();
+  draftSaveStatus('');
+  refreshDbSize();
+  renderDraft();
+  document.getElementById('resumeImport').style.display = 'none';
+  document.getElementById('discardDraft').style.display = 'none';
+  document.getElementById('importStatus').style.display = 'none';
+}
+document.getElementById('discardDraft').addEventListener('click', clearDraft);
+document.getElementById('clearDraft').addEventListener('click', clearDraft);
 document.getElementById('segmentDuration').addEventListener('change', e => { segmentDurationSec = Number(e.target.value) || 600; updateSegmentUI(); });
 document.getElementById('startSegmented').addEventListener('click', async () => { await runSegmentedImport(); });
 
@@ -764,7 +853,7 @@ document.getElementById('batchSave').addEventListener('click', async () => {
   if(!db.draft || !db.draft.shots.length) return alert('没有可保存的草稿。');
   const chosen = db.draft.shots.filter(s=>s.checked!==false).map(s=>{ const {checked, aiFilled, subtitleSource, ...rest} = s; return {...rest, sample:false}; });
   await api('/api/shots/batch', { method: 'POST', body: JSON.stringify({ shots: chosen }) });
-  db.draft = null; try{localStorage.removeItem(DRAFT_LS);}catch(e){} renderDraft(); await refreshData(); renderShots();
+  db.draft = null; try{localStorage.removeItem(DRAFT_LS);}catch(e){} await deleteDraftFromServer(); draftSaveStatus(''); refreshDbSize(); renderDraft(); await refreshData(); renderShots();
   alert(`已存入拉片库 ${chosen.length} 个镜头，草稿已清除。`);
 });
 
@@ -780,7 +869,7 @@ async function saveSegmentShots(segIndex){
   await api('/api/shots/batch', { method: 'POST', body: JSON.stringify({ shots: chosen }) });
   d.shots = d.shots.filter(s => !((s.segment ?? 0) === segIndex && s.checked !== false));
   if (seg) { seg.status = 'saved'; seg.shotCount = d.shots.filter(s => (s.segment ?? 0) === segIndex).length; }
-  if (!d.shots.length) { db.draft = null; try{localStorage.removeItem(DRAFT_LS);}catch(e){} }
+  if (!d.shots.length) { db.draft = null; try{localStorage.removeItem(DRAFT_LS);}catch(e){} await deleteDraftFromServer(); draftSaveStatus(''); refreshDbSize(); }
   else saveDraft();
   renderDraft(); await refreshData(); renderShots();
   alert(`第 ${segIndex + 1} 段已存入拉片库 ${chosen.length} 个镜头。`);
@@ -1118,7 +1207,7 @@ const HELP = {
       <li>两个批量按钮都从当前滑轨所在的镜头起处理 10 个镜头（快到末尾时只处理剩下的）；单个镜头也有自己的预填按钮。AI 未配置时会明确报错，不会编造。</li>
     </ul>
     <h4>草稿断点恢复</h4>
-    <p>导入草稿会自动保存到浏览器本地缓存（localStorage），切页签、刷新后仍在；中途刷新或中断会显示「继续导入 / 恢复」，点它可从断点接着跑（若视频文件没保住，会提示你重新选择同一个视频文件）。不想要了点「放弃这次导入」。</p>
+    <p>导入草稿会自动保存到服务器（同时在本机留一份缓存），切页签、刷新、换设备、换浏览器后下次打开仍是同样的镜头和数量；中途刷新或中断会显示「继续导入 / 恢复」，点它可从断点接着跑（若视频文件没保住，会提示你重新选择同一个视频文件）。草稿只有手动点「清除草稿」/「放弃这次导入」，或批量存入拉片库后才会被清除；服务端只存一份当前草稿，单份上限 50MB（Neon 免费额度 1GB/项目），用量显示在草稿区下方。</p>
     <h4>小技巧</h4>
     <p>鼠标停在关键帧上可看大图；草稿里每条前面的复选框可取消勾选，不想存入拉片库的镜头去掉勾即可。镜头多了可以用草稿上方的「快速定位镜头」滑轨：拖到第 N 个，下面镜头表就滚动到第 N 个镜头置顶并高亮，拖动时滑轨固定不动；滑轨两边的 ‹ › 按钮点一下前后移动一个镜头。拖滑轨、点箭头或点某条镜头时，草稿上方的原视频预览也会跳到该镜头的开始时间并暂停，方便对照原视频核对信息；若刷新后还没重新选择视频文件，预览下方会提示重选同一文件后再定位。关键帧不满意：把上方原视频预览拖到想要的画面并暂停，再点该镜头行的「重截关键帧」，就用预览当前画面替换旧截图；镜头的开始时间、时长和分析字段都不变。刷新后需先重选同一视频文件才能重截。</p>` },
 };
@@ -1144,7 +1233,11 @@ document.addEventListener('keydown', e => {
 
 /* ---- init ---- */
 (async () => {
-  db.draft = loadDraftFromCache();
+  /* 草稿优先从服务端恢复（下次打开仍是同样的镜头和数量）；服务端没有或
+     连不上时，才用本机 localStorage 缓存兜底。 */
+  db.draft = (await loadDraftFromServer()) || loadDraftFromCache();
+  if (db.draft) saveDraftToLocal(); /* 服务端恢复的草稿，顺手同步一份到本机缓存 */
+  refreshDbSize();
   try { await refreshData(); } catch (err) { alert('加载数据失败：' + err.message + '。请确认服务已启动、Neon 已配置。'); }
   refreshHealth();
   renderShots(); renderKnowledge(); renderHistory(); renderDraft();

@@ -165,8 +165,8 @@
     </div>
 
     <div class="card">
-      <h3>导入草稿 <span class="muted" id="draftCount"></span></h3>
-      <p class="muted">导入草稿自动保存（浏览器本地缓存），切页签、刷新后仍在；批量存入拉片库后自动清除草稿。拉片库数据本身存在 Neon。</p>
+      <h3>导入草稿 <span class="muted" id="draftCount"></span> <span class="muted" id="draftSaveStatus"></span></h3>
+      <p class="muted">导入草稿自动保存到服务器（同时在本机留一份缓存），下次打开本站仍是同样的镜头和数量；只有手动点「清除草稿」，或批量存入拉片库后，草稿才会被清除。视频文件只保存在当前浏览器里，刷新后需重选同一文件。<br><span id="dbSizeLine">数据库用量加载中…</span></p>
       <video id="videoPlayer" controls style="width:100%;max-height:220px;background:#000;border-radius:8px;display:none"></video>
       <div id="previewHint" class="muted" style="display:none;margin-top:6px">重新选择同一视频文件后可预览定位（视频文件只保存在当前浏览器里，刷新后需重选同一文件）。</div>
       <div id="shotScrubber" class="scrubber" style="display:none">
@@ -180,6 +180,7 @@
         <button id="batchHeuristic">批量识图（当前起10个）</button>
         <button id="batchSequence">顺序预填（当前起10个）</button>
         <button class="primary" id="batchSave">一键批量存入拉片库</button>
+        <button id="clearDraft" title="删掉服务端和本机保存的这次导入草稿，下次打开不再恢复这些镜头">清除草稿</button>
       </div>
       <div id="draftList" style="margin-top:12px"></div>
     </div>

@@ -11,7 +11,9 @@ const ai = require('./lib/ai');
 const match = require('./lib/match');
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
+/* 50mb：590 个镜头的草稿（含关键帧 data URL）一次 PUT 可能超过 10mb；
+   单人自用部署，服务端只做 JSON 解析，不存文件。 */
+app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -103,6 +105,36 @@ app.post('/api/ai/summarize-why', asyncHandler(async (req, res) => {
   } catch (err) { aiErrorResponse(res, err); }
 }));
 
+/* ---- 视频导入草稿（服务端持久化，Neon import_drafts 表，单人用只存一条） ----
+   草稿只在用户手动清除或批量存入拉片库时删除；其它任何时候（刷新、换设备、
+   换浏览器）下次打开都从服务端恢复同样的镜头和数量。 */
+/* Neon 免费额度：1 GB Postgres 存储 / 项目（2026-10-02 起由 0.5 GB 上调，
+   20 GB 跨项目总计），见 neon.com/docs/introduction/plans。单份草稿上限
+   50 MB 只是该额度的约 5%，留足余量。 */
+const NEON_FREE_LIMIT_MB = 1024;
+const DRAFT_MAX_BYTES = 50 * 1024 * 1024;
+app.get('/api/import-drafts/current', asyncHandler(async (req, res) => {
+  res.json(await store.getDraft());
+}));
+app.put('/api/import-drafts/current', asyncHandler(async (req, res) => {
+  const draft = req.body || {};
+  if (!Array.isArray(draft.shots)) return res.status(400).json({ error: '草稿格式不正确（缺少镜头列表）' });
+  const size = Buffer.byteLength(JSON.stringify(draft), 'utf8');
+  if (size > DRAFT_MAX_BYTES) return res.status(413).json({ error: `草稿太大（约 ${(size / 1048576).toFixed(1)} MB，超过 50 MB 上限），未保存到服务器；本机缓存仍保留，请分段存入拉片库后清除草稿再继续。` });
+  res.json(await store.saveDraft(draft));
+}));
+app.delete('/api/import-drafts/current', asyncHandler(async (req, res) => {
+  await store.deleteDraft();
+  res.json({ ok: true });
+}));
+
+/* ---- 数据库用量：pg_database_size，供导入页显示“已用 X MB / 免费额度 1024 MB” ---- */
+app.get('/api/db-size', asyncHandler(async (req, res) => {
+  const bytes = await store.getDbSize();
+  if (bytes === null) return res.json({ available: false });
+  res.json({ available: true, bytes, mb: +(bytes / 1048576).toFixed(1), limitMb: NEON_FREE_LIMIT_MB });
+}));
+
 /* ---- 匹配逻辑：浏览器加载同一份 lib/match.js，本地规则生成与服务端共用加权打分 ---- */
 app.get('/match.js', (req, res) => res.sendFile(path.join(__dirname, 'lib', 'match.js')));
 
@@ -147,6 +179,16 @@ app.post('/api/ai/storyboard', asyncHandler(async (req, res) => {
 
 /* ---- 兜底：SPA 入口 ---- */
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+
+/* 请求体超过 50mb 上限（body-parser 在路由处理前拦截）：返回明确的 413，
+   而不是通用的 500，让客户端显示“草稿太大，未保存到服务器”。 */
+/* eslint-disable-next-line no-unused-vars */
+app.use((err, req, res, next) => {
+  if (err && err.type === 'entity.too.large') {
+    return res.status(413).json({ error: '草稿太大（超过 50 MB 上限），未保存到服务器；本机缓存仍保留，请分段存入拉片库后清除草稿再继续。' });
+  }
+  return next(err);
+});
 
 /* eslint-disable-next-line no-unused-vars */
 app.use((err, req, res, next) => {
