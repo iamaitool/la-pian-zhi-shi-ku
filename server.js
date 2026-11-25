@@ -90,6 +90,19 @@ app.post('/api/ai/extract-knowledge', asyncHandler(async (req, res) => {
   } catch (err) { aiErrorResponse(res, err); }
 }));
 
+/* ---- AI：“为什么这样用”总结（视频导入草稿镜头） ----
+   只按镜头当前已填的全部内容总结，200 字以内；AI 未配置时返回 503 明确提示，
+   不编造、不做本地模板兜底。 */
+app.post('/api/ai/summarize-why', asyncHandler(async (req, res) => {
+  try {
+    const shot = (req.body && req.body.shot) || {};
+    const filled = Object.values(shot).some((v) => { const t = String(v ?? '').trim(); return t && t !== '待填写'; });
+    if (!filled) return res.status(400).json({ error: '这个镜头还没有填写任何内容，无法总结' });
+    const out = await ai.summarizeWhy({ shot });
+    res.json(out);
+  } catch (err) { aiErrorResponse(res, err); }
+}));
+
 /* ---- 匹配逻辑：浏览器加载同一份 lib/match.js，本地规则生成与服务端共用加权打分 ---- */
 app.get('/match.js', (req, res) => res.sendFile(path.join(__dirname, 'lib', 'match.js')));
 

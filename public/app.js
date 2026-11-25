@@ -559,7 +559,15 @@ function showResume(){ document.getElementById('resumeImport').style.display='in
 function seekTo(t){ return new Promise(res => { player.onseeked = () => res(); player.currentTime = Math.min(t, (player.duration||t)-0.01); setTimeout(res, 800); }); }
 
 /* ---- drafts ---- */
-function draftField(d, f){ return `<div class="field"><label>${FIELD_LABEL[f]}</label><input data-draft="${d.id}" data-field="${f}" value="${esc(d[f]||'')}" placeholder="待填写"></div>`; }
+function draftField(d, f){
+  if (f === 'why') {
+    /* “为什么这样用”旁边挂一个 AI 总结按钮：按当前镜头已填的全部内容总结（200 字以内）。
+       加载态记在 aiBusy（'w:<镜头id>'），renderDraft 重渲染时恢复按钮状态。 */
+    const busy = aiBusy.has('w:' + d.id);
+    return `<div class="field"><label>${FIELD_LABEL[f]}</label><div class="why-wrap"><input data-draft="${d.id}" data-field="why" value="${esc(d.why||'')}" placeholder="待填写"><button type="button" class="ai-why-btn" data-ai-why="${d.id}" title="用 AI 根据当前镜头已填的全部内容，总结“为什么这样用”（200 字以内）" ${busy ? 'disabled' : ''}>${busy ? '生成中…' : '✦ AI'}</button></div></div>`;
+  }
+  return `<div class="field"><label>${FIELD_LABEL[f]}</label><input data-draft="${d.id}" data-field="${f}" value="${esc(d[f]||'')}" placeholder="待填写"></div>`;
+}
 function renderDraft(){
   const d = db.draft;
   document.getElementById('draftCount').textContent = d ? `共 ${d.shots.length} 个镜头 · ${d.phase||''}` : '暂无草稿';
@@ -612,6 +620,7 @@ document.getElementById('draftList').addEventListener('click', e => {
   if(del){ db.draft.shots = db.draft.shots.filter(s=>s.id!==del.dataset.delDraft); saveDraft(); renderDraft(); return; }
   const h = e.target.closest('[data-heuristic]'); if(h){ aiPrefill(h.dataset.heuristic); return; }
   const sq = e.target.closest('[data-sequence]'); if(sq){ sequencePrefill(sq.dataset.sequence); return; }
+  const aw = e.target.closest('[data-ai-why]'); if(aw){ summarizeWhy(aw.dataset.aiWhy); return; }
   const rc = e.target.closest('[data-recapture]'); if(rc){ recaptureThumb(rc.dataset.recapture); return; }
   const xd = e.target.closest('[data-extract-draft]'); if(xd){ extractDraftShot(xd.dataset.extractDraft, xd.closest('button')); return; }
   /* 点某条镜头时，滑轨同步到该镜头编号（删除/预填按钮已在上面处理并返回），原视频预览也跳到该镜头 */
@@ -776,7 +785,7 @@ async function saveSegmentShots(segIndex){
 
 /* ---- AI 预填加载态：renderDraft 会整体重渲染草稿列表，所以按钮的
    “分析中 / 预填中”状态不能只改 DOM，必须记在这个集合里，渲染时查它 ---- */
-const aiBusy = new Set(); /* 元素形如 'h:<镜头id>'（识图）或 's:<镜头id>'（顺序） */
+const aiBusy = new Set(); /* 元素形如 'h:<镜头id>'（识图）、's:<镜头id>'（顺序）或 'w:<镜头id>'（为什么 AI 总结） */
 
 /* 顺序预填只发精简文本摘要：不含关键帧图片（thumb 是几十 KB 的 base64，
    整批发过去既慢又可能撑爆请求体），index 用镜头在整批草稿里的原始编号。 */
@@ -829,6 +838,24 @@ async function sequencePrefill(id){
     if (r.montage) s.montage = r.montage;
     if (r.why) s.why = r.why;
     s.aiFilled = true; saveDraft();
+  } catch (err) { alert(String(err.message || err)); }
+  finally { aiBusy.delete(key); renderDraft(); }
+}
+/* ---- “为什么这样用”AI 总结：只看当前镜头已填的全部内容 ----
+   把草稿对象里该镜头当前填好的 14 个字段发给服务端 AI，写一句 200 字以内的
+   总结，填回该镜头的“为什么这样用”并自动保存草稿。草稿输入框的 input 事件
+   会实时同步到草稿对象，所以发过去的就是用户当前输入的内容。
+   没有本地模板兜底：AI 未配置时服务端返回 503，明确提示，不编造。 */
+async function summarizeWhy(id){
+  const d = db.draft && db.draft.shots.find(x=>x.id===id); if(!d) return;
+  const key = 'w:' + id; if (aiBusy.has(key)) return; /* 已在跑，防重复点击 */
+  aiBusy.add(key); renderDraft();
+  try {
+    const shot = {}; FIELDS.forEach(f => { shot[f] = d[f] || ''; });
+    const out = await aiApi('/api/ai/summarize-why', { shot });
+    if (out && typeof out.summary === 'string' && out.summary.trim()) {
+      d.why = out.summary.trim(); saveDraft();
+    } else { alert('AI 没有返回有效的总结。'); }
   } catch (err) { alert(String(err.message || err)); }
   finally { aiBusy.delete(key); renderDraft(); }
 }
@@ -1084,6 +1111,7 @@ const HELP = {
     <ul>
       <li><b>识图预填</b>：看关键帧图片，只补景别、机位、构图、光线、画面内容、人物动作、情绪这 7 个能“看出来”的字段，标“AI预填”。运镜、转场、蒙太奇、对白、音乐、音效和“为什么”留空。</li>
       <li><b>顺序预填</b>：看当前镜头和前后镜头、结合对白，推测转场方式、蒙太奇运用和“为什么这样用”，标“AI预填·推测”，请核对后再保存。</li>
+      <li><b>“为什么这样用”旁边的 ✦ AI 按钮</b>：只看当前镜头你已填的全部内容，用 AI 写一句 200 字以内的总结，直接填进“为什么这样用”；已有内容时会帮它改写得更凝练。AI 未配置时会明确报错，不会编造。</li>
       <li>两个批量按钮都从当前滑轨所在的镜头起处理 10 个镜头（快到末尾时只处理剩下的）；单个镜头也有自己的预填按钮。AI 未配置时会明确报错，不会编造。</li>
     </ul>
     <h4>草稿断点恢复</h4>
